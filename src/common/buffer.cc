@@ -35,6 +35,8 @@
 #include <limits.h>
 #include "lz4.h"
 
+#include "lz4.h"
+
 namespace ceph {
 
 #ifdef BUFFER_DEBUG
