@@ -159,7 +159,8 @@ struct ceph_msg_header {
 
 	/* oldest code we think can decode this.  unknown if zero. */
 	__le16 compat_version;
-	__le16 reserved;
+	__u8   flags;     /* temporarily take first byte of reserved field */
+	__u8   reserved;
 	__le32 crc;       /* header crc32c */
 } __attribute__ ((packed));
 
@@ -167,6 +168,10 @@ struct ceph_msg_header {
 #define CEPH_MSG_PRIO_DEFAULT 127
 #define CEPH_MSG_PRIO_HIGH    196
 #define CEPH_MSG_PRIO_HIGHEST 255
+
+#define CEPH_MSG_HEADER_COMPRESS_FRONT  (1<<0)
+#define CEPH_MSG_HEADER_COMPRESS_MIDDLE (1<<1)
+#define CEPH_MSG_HEADER_COMPRESS_DATA   (1<<2)
 
 /*
  * follows data payload
