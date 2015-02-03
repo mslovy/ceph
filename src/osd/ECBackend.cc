@@ -388,7 +388,7 @@ void ECBackend::handle_recovery_read_complete(
     op.xattrs.swap(*attrs);
 
     if (!op.obc) {
-      op.obc = get_parent()->get_obc(hoid, op.xattrs);
+      op.obc = get_parent()->get_obc(hoid, true, &op.xattrs);
       op.recovery_info.size = op.obc->obs.oi.size;
       op.recovery_info.oi = op.obc->obs.oi;
     }
@@ -1921,6 +1921,12 @@ void ECBackend::be_deep_scrub(
   if (stride % sinfo.get_chunk_size())
     stride += sinfo.get_chunk_size() - (stride % sinfo.get_chunk_size());
   uint64_t pos = 0;
+
+  // Look at whether the obc was in the cache for whether the object is warm or not
+  uint32_t fadvise_flags = CEPH_OSD_OP_FLAG_FADVISE_SEQUENTIAL;
+  if (!get_parent()->get_obc(poid, false))
+    fadvise_flags |= CEPH_OSD_OP_FLAG_FADVISE_DONTNEED;
+
   while (true) {
     bufferlist bl;
     handle.reset_tp_timeout();
@@ -1930,7 +1936,7 @@ void ECBackend::be_deep_scrub(
 	poid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
       pos,
       stride, bl,
-      true);
+      fadvise_flags, true);
     if (r < 0)
       break;
     if (bl.length() % sinfo.get_chunk_size()) {

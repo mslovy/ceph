@@ -163,7 +163,10 @@
 
      virtual ObjectContextRef get_obc(
        const hobject_t &hoid,
-       map<string, bufferlist> &attrs) = 0;
+       bool can_create,
+       map<string, bufferlist> *attrs=0) = 0;
+
+     virtual bool is_blocked_object(const hobject_t &hoid) = 0;
 
      virtual void op_applied(
        const eversion_t &applied_version) = 0;

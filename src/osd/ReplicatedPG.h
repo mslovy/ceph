@@ -369,8 +369,12 @@ public:
   }
   ObjectContextRef get_obc(
     const hobject_t &hoid,
-    map<string, bufferlist> &attrs) {
-    return get_object_context(hoid, true, &attrs);
+    bool can_create,
+    map<string, bufferlist> *attrs) {
+    return get_object_context(hoid, can_create, attrs);
+  }
+  bool is_blocked_object(const hobject_t &hoid) {
+    return waiting_for_unreadable_object.count(hoid) || waiting_for_degraded_object.count(hoid);
   }
   void log_operation(
     const vector<pg_log_entry_t> &logv,

@@ -756,13 +756,19 @@ void ReplicatedBackend::be_deep_scrub(
   bufferlist bl, hdrbl;
   int r;
   __u64 pos = 0;
+
+  // Look at whether the obc was in the cache for whether the object is warm or not
+  uint32_t fadvise_flags = CEPH_OSD_OP_FLAG_FADVISE_SEQUENTIAL;
+  if (!get_parent()->get_obc(poid, false))
+    fadvise_flags |= CEPH_OSD_OP_FLAG_FADVISE_DONTNEED;
+
   while ( (r = store->read(
-	     coll,
-	     ghobject_t(
-	       poid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
-	     pos,
-	     cct->_conf->osd_deep_scrub_stride, bl,
-	     true)) > 0) {
+             coll,
+             ghobject_t(
+               poid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
+             pos,
+             cct->_conf->osd_deep_scrub_stride, bl,
+             fadvise_flags, true)) > 0) {
     handle.reset_tp_timeout();
     h << bl;
     pos += bl.length();
@@ -1709,13 +1715,16 @@ void ReplicatedBackend::submit_push_data(
     t->omap_setheader(target_coll, recovery_info.soid, omap_header);
   }
   uint64_t off = 0;
+  uint32_t fadvise_flags = CEPH_OSD_OP_FLAG_FADVISE_SEQUENTIAL;
+  if (!get_parent()->is_blocked_object(recovery_info.soid))
+    fadvise_flags |= CEPH_OSD_OP_FLAG_FADVISE_DONTNEED;
   for (interval_set<uint64_t>::const_iterator p = intervals_included.begin();
        p != intervals_included.end();
        ++p) {
     bufferlist bit;
     bit.substr_of(data_included, off, p.get_len());
-    t->write(target_coll, recovery_info.soid,
-	     p.get_start(), p.get_len(), bit);
+    t->write(target_coll, recovery_info.soid, p.get_start(), p.get_len(),
+             bit, fadvise_flags);
     off += p.get_len();
   }
 
@@ -1808,7 +1817,7 @@ bool ReplicatedBackend::handle_pull_response(
 
   bool first = pi.recovery_progress.first;
   if (first) {
-    pi.obc = get_parent()->get_obc(pi.recovery_info.soid, pop.attrset);
+    pi.obc = get_parent()->get_obc(pi.recovery_info.soid, true, &pop.attrset);
     pi.recovery_info.oi = pi.obc->obs.oi;
     pi.recovery_info = recalc_subsets(pi.recovery_info, pi.obc->ssc);
   }
@@ -2070,12 +2079,17 @@ int ReplicatedBackend::build_push_op(const ObjectRecoveryInfo &recovery_info,
     out_op->data_included.clear();
   }
 
+  // Look at whether the obc was in the cache for whether the object is warm or not
+  bool validate_cache = true;
+  if (!get_parent()->get_obc(recovery_info.soid, false))
+    validate_cache = false;
+
   for (interval_set<uint64_t>::iterator p = out_op->data_included.begin();
        p != out_op->data_included.end();
        ++p) {
     bufferlist bit;
-    store->read(coll, recovery_info.soid,
-		     p.get_start(), p.get_len(), bit);
+    store->read(coll, recovery_info.soid, p.get_start(), p.get_len(), bit,
+                validate_cache ? CEPH_OSD_OP_FLAG_FADVISE_DONTNEED: 0);
     if (p.get_len() != bit.length()) {
       dout(10) << " extent " << p.get_start() << "~" << p.get_len()
 	       << " is actually " << p.get_start() << "~" << bit.length()
