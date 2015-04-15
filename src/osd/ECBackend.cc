@@ -183,7 +183,8 @@ ECBackend::ECBackend(
     cct(cct),
     ec_impl(ec_impl),
     sinfo(ec_impl->get_data_chunk_count(), stripe_width),
-    partial_read_ratio(g_conf->osd_pool_erasure_code_partial_chunk_read_ratio) {
+    partial_read_ratio(g_conf->osd_pool_erasure_code_partial_chunk_read_ratio),
+    subread_all(g_conf->osd_pool_erasure_code_subread_all) {
   assert(partial_read_ratio <= 1.0);
   assert((ec_impl->get_data_chunk_count() *
 	  ec_impl->get_chunk_size(stripe_width)) == stripe_width);
@@ -903,7 +904,7 @@ void ECBackend::handle_sub_read(
 	bl, j->get<2>(),
 	false);
       if (r < 0) {
-	assert(0);
+        assert(subread_all); // only tolerate read failure when turn on the sub-read all flag
 	reply->buffers_read.erase(i->first);
 	reply->errors[i->first] = r;
 	break;
@@ -1027,7 +1028,25 @@ shard_to_read_map.find(from);
   assert(rop.in_progress.count(from));
   rop.in_progress.erase(from);
   if (!rop.in_progress.empty()) {
-    dout(10) << __func__ << " readop not complete: " << rop << dendl;
+    if (subread_all) {
+      uint32_t k = ec_impl->get_data_chunk_count();
+      for (map<hobject_t, read_result_t>::iterator i =
+            rop.complete.begin();
+          i != rop.complete.end();
+          ++i) {
+        if ( i->second.returned.front().get<2>().size() < k ) {
+          dout(10) << __func__ << " readop not complete: " << rop << dendl;
+          return;
+        }
+      }
+      utime_t latency = ceph_clock_now(NULL) - rop.start;
+      get_parent()->get_logger()->tinc(l_osd_ec_op_r_lat, latency);
+      dout(10) << __func__ << " readop complete: " << rop << " lat " << latency << dendl;
+      rop.in_progress.clear();
+      complete_read_op(rop, m);
+    } else {
+      dout(10) << __func__ << " readop not complete: " << rop << dendl;
+    }
   } else {
     utime_t latency = ceph_clock_now(NULL) - rop.start;
     get_parent()->get_logger()->tinc(l_osd_ec_op_r_lat, latency);
@@ -1389,9 +1408,16 @@ int ECBackend::get_min_avail_to_read_shards(
   }
 
   set<int> need;
-  int r = ec_impl->minimum_to_decode(want, have, &need);
-  if (r < 0)
-    return r;
+  if (subread_all && !for_recovery) {
+    if (have.size() < ec_impl->get_data_chunk_count()) {
+      return -EIO;
+    }
+    need = have;
+  } else {
+    int r = ec_impl->minimum_to_decode(want, have, &need);
+    if (r < 0)
+      return r;
+  }
 
   if (!to_read)
     return 0;
@@ -1655,8 +1681,6 @@ struct CallClientContexts :
   void finish(pair<RecoveryMessages *, ECBackend::read_result_t &> &in) {
     ECBackend::read_result_t &res = in.second;
     assert(res.returned.size() == to_read.size());
-    assert(res.r == 0);
-    assert(res.errors.empty());
     assert(to_read.size() == res.partial_read.size());
     assert(to_read.size() == res.need.size());
     list<bool>::const_iterator it = res.partial_read.begin();
@@ -1668,6 +1692,8 @@ struct CallClientContexts :
 	 to_read.erase(i++), ++it, ++nj) {
           
       if (*it) { // whether this op is send to partial shards
+        assert(res.r == 0);
+        assert(res.errors.empty());
         bufferlist bl;
         for(list<boost::tuple<pg_shard_t, uint64_t, uint64_t> >::const_iterator j = 
             nj->begin(); 
@@ -1678,17 +1704,27 @@ struct CallClientContexts :
         assert(bl.length() == i->first.get<1>());
         i->second.first->swap(bl);
       } else {
+        if (!ec->subread_all) {
+          assert(res.r == 0);
+          assert(res.errors.empty());
+        }
         pair<uint64_t, uint64_t> adjusted =
   	ec->sinfo.offset_len_to_stripe_bounds(make_pair(i->first.get<0>(), i->first.get<1>()));
         assert(res.returned.front().get<0>() == adjusted.first &&
   	     res.returned.front().get<1>() == adjusted.second);
         map<int, bufferlist> to_decode;
         bufferlist bl;
+        int jj = 0;
+        int k = ec->ec_impl->get_data_chunk_count();
         for (map<pg_shard_t, bufferlist>::iterator j =
   	     res.returned.front().get<2>().begin();
-  	   j != res.returned.front().get<2>().end();
+  	   j != res.returned.front().get<2>().end() && jj < k;
   	   ++j) {
-  	to_decode[j->first.shard].claim(j->second);
+          uint64_t data_len = j->second.length();
+          if ((data_len > 0) && (data_len % ec->sinfo.get_chunk_size() == 0)) {
+            to_decode[j->first.shard].claim(j->second);
+            jj++;
+          }
         }
         ECUtil::decode(
   	  ec->sinfo,
