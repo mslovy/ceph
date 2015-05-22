@@ -459,11 +459,14 @@ public:
   virtual void dump(Formatter *f) const;
 
   void encode(uint64_t features, int crcflags);
-  static void _compress_encode(bufferlist &in_bl, bufferlist &out_bl);
-  void compress(int crcflags, ceph_msg_header &header, ceph_msg_footer& footer,
-                bufferlist& front, bufferlist& middle, bufferlist& data);
+  static void _compress_encode(bufferlist &in_bl);
+  void compress(int crcflags);
   static int _decompress_decode(bufferlist &in_bl, bufferlist &out_bl);
   static int decompress(CephContext *cct, int crcflags, ceph_msg_header &header,
+                        ceph_msg_footer &footer, bufferlist &front,
+                        bufferlist &middle, bufferlist &data);
+  void calc_crc(int crcflags);
+  static bool verify_crc(CephContext *cct, int crcflags, ceph_msg_header &header,
                         ceph_msg_footer &footer, bufferlist &front,
                         bufferlist &middle, bufferlist &data);
 };

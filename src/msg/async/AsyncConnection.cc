@@ -780,41 +780,14 @@ void AsyncConnection::process()
                                   current_header.middle_len +
                                   current_header.data_len;
 
+          // verify crc
+          if (Message::verify_crc(msgr->cct, msgr->crcflags, current_header,
+                                           footer, front, middle, data)) {
+            goto fail;
+          }
+
           // decompress message
           if (current_header.flags != 0) {
-            // verify crc before inflating
-            if ((async_msgr->crcflags & MSG_CRC_HEADER) != 0 &&
-                (footer.flags & CEPH_MSG_FOOTER_NOHEADERCRC) == 0) {
-              __u32 front_crc = front.crc32c(0);
-              __u32 middle_crc = middle.crc32c(0);
-
-              if (front_crc != footer.front_crc) {
-                ldout(async_msgr->cct, 0) << "bad crc in front " << front_crc << " != exp " << footer.front_crc << dendl;
-                ldout(async_msgr->cct, 20) << " ";
-                front.hexdump(*_dout);
-                *_dout << dendl;
-                goto fail;;
-              }
-              if (middle_crc != footer.middle_crc) {
-                ldout(async_msgr->cct, 0) << "bad crc in middle " << middle_crc << " != exp " << footer.middle_crc << dendl;
-                ldout(async_msgr->cct, 20) << " ";
-                middle.hexdump(*_dout);
-                *_dout << dendl;
-                goto fail;;
-              }
-            }
-            if ((async_msgr->crcflags & MSG_CRC_DATA) != 0 &&
-                (footer.flags & CEPH_MSG_FOOTER_NODATACRC) == 0) {
-              __u32 data_crc = data.crc32c(0);
-              if (data_crc != footer.data_crc) {
-                ldout(async_msgr->cct, 0) << "bad crc in data " << data_crc << " != exp " << footer.data_crc << dendl;
-                ldout(async_msgr->cct, 20) << " ";
-                data.hexdump(*_dout);
-                *_dout << dendl;
-                goto fail;
-              }
-            }
-
             ldout(msgr->cct, 20) << "decompressing incoming message" << dendl;
             ldout(msgr->cct, 20) << __func__ << " BEFORE decompression:\n"
                                  << " front_len=" << front.length()
@@ -2202,7 +2175,9 @@ int AsyncConnection::_send(Message *m)
   // prepare everything
   ceph_msg_header& header = m->get_header();
   ceph_msg_footer& footer = m->get_footer();
-  bufferlist front, middle, data;
+  bufferlist front = m->get_payload();
+  bufferlist middle = m->get_middle();
+  bufferlist data = m->get_data();
 
   // if receiver supports compression, and this message does need compression
   if ((features & CEPH_FEATURE_MSG_COMPRESS) &&
@@ -2215,7 +2190,7 @@ int AsyncConnection::_send(Message *m)
                          << " data_len=" << m->get_data().length()
                          << " header.data_len=" << header.data_len
                          << dendl;
-    m->compress(msgr->crcflags, header, footer, front, middle, data);
+    m->compress(msgr->crcflags);
     ldout(msgr->cct, 20) << __func__ << " BEFORE compression:\n"
                          << " front_len=" << m->get_payload().length()
                          << " header.front_len=" << header.front_len
@@ -2243,8 +2218,6 @@ int AsyncConnection::_send(Message *m)
       ldout(async_msgr->cct, 20) << __func__ << " failed to sign seq # "
                            << header.seq << "): sig = " << footer.sig << dendl;
     } else {
-      header = m->get_header();
-      footer = m->get_footer();
       ldout(async_msgr->cct, 20) << __func__ << " signed seq # " << header.seq
                            << "): sig = " << footer.sig << dendl;
     }

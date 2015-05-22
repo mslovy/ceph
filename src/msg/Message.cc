@@ -185,15 +185,18 @@ void Message::encode(uint64_t features, int crcflags)
       header.compat_version = header.version;
   }
 
-  if (crcflags & MSG_CRC_HEADER)
-    calc_front_crc();
-
   // update envelope
   header.front_len = get_payload().length();
   header.middle_len = get_middle().length();
   header.data_len = get_data().length();
 
   footer.flags = CEPH_MSG_FOOTER_COMPLETE;
+}
+
+void Message::calc_crc(int crcflags)
+{
+  if (crcflags & MSG_CRC_HEADER)
+    calc_front_crc();
 
   if (crcflags & MSG_CRC_HEADER)
     calc_header_crc();
@@ -252,19 +255,21 @@ void Message::dump(Formatter *f) const
   f->dump_string("summary", ss.str());
 }
 
-void Message::_compress_encode(bufferlist &in_bl, bufferlist &out_bl)
+void Message::_compress_encode(bufferlist &in_bl)
 {
   bufferlist compressed_bl;
+  bufferlist out_bl;
 
   in_bl.compress(buffer::ALG_LZ4, compressed_bl);
 
   ::encode(in_bl.length(), out_bl);
   ::encode(in_bl.crc32c(0), out_bl);
   ::encode(compressed_bl, out_bl);
+
+  in_bl.claim(out_bl);
 }
 
-void Message::compress(int crcflags, ceph_msg_header &header, ceph_msg_footer& footer,
-                       bufferlist& front, bufferlist& middle, bufferlist& data)
+void Message::compress(int crcflags)
 {
   if (header.flags == 0)
     header.flags = CEPH_MSG_HEADER_COMPRESS_FRONT |
@@ -273,38 +278,27 @@ void Message::compress(int crcflags, ceph_msg_header &header, ceph_msg_footer& f
 
   if ((header.flags & CEPH_MSG_HEADER_COMPRESS_FRONT) != 0 &&
       this->payload.length() > 0)
-    _compress_encode(this->payload, front);
+    _compress_encode(this->payload);
   else
     header.flags &= ~CEPH_MSG_HEADER_COMPRESS_FRONT;
 
   if ((header.flags & CEPH_MSG_HEADER_COMPRESS_MIDDLE) != 0 &&
       this->middle.length() > 0)
-    _compress_encode(this->middle, middle);
+    _compress_encode(this->middle);
   else
     header.flags &= ~CEPH_MSG_HEADER_COMPRESS_MIDDLE;
 
   if ((header.flags & CEPH_MSG_HEADER_COMPRESS_DATA) != 0 &&
       this->data.length() > 0)
-    _compress_encode(this->data, data);
+    _compress_encode(this->data);
   else
     header.flags &= ~CEPH_MSG_HEADER_COMPRESS_DATA;
 
-  if (crcflags & MSG_CRC_HEADER) {
-    footer.front_crc = front.crc32c(0);
-    footer.middle_crc = middle.crc32c(0);
-  }
-
   // update envelope
-  header.front_len = front.length();
-  header.middle_len = middle.length();
-  header.data_len = data.length();
+  header.front_len = get_payload().length();
+  header.middle_len = get_middle().length();
+  header.data_len = get_data().length();
 
-  if (crcflags & MSG_CRC_HEADER)
-    header.crc = ceph_crc32c(0, (unsigned char*)&header,
-			     sizeof(header) - sizeof(header.crc));
-
-  if (crcflags & MSG_CRC_DATA)
-    footer.data_crc = data.crc32c(0);
 }
 
 int Message::_decompress_decode(bufferlist &in_bl, bufferlist &out_bl)
@@ -398,7 +392,7 @@ int Message::decompress(CephContext *cct, int crcflags,
   return 0;
 }
 
-Message *decode_message(CephContext *cct, int crcflags,
+bool Message::verify_crc(CephContext *cct, int crcflags,
 			ceph_msg_header& header,
 			ceph_msg_footer& footer,
 			bufferlist& front, bufferlist& middle,
@@ -417,7 +411,7 @@ Message *decode_message(CephContext *cct, int crcflags,
 	front.hexdump(*_dout);
 	*_dout << dendl;
       }
-      return 0;
+      return true;
     }
     if (middle_crc != footer.middle_crc) {
       if (cct) {
@@ -426,7 +420,7 @@ Message *decode_message(CephContext *cct, int crcflags,
 	middle.hexdump(*_dout);
 	*_dout << dendl;
       }
-      return 0;
+      return true;
     }
   }
   if ((crcflags & MSG_CRC_DATA) != 0 &&
@@ -439,10 +433,19 @@ Message *decode_message(CephContext *cct, int crcflags,
 	data.hexdump(*_dout);
 	*_dout << dendl;
       }
-      return 0;
+      return true;
     }
   }
+  
+  return false;
+}
 
+Message *decode_message(CephContext *cct, int crcflags,
+			ceph_msg_header& header,
+			ceph_msg_footer& footer,
+			bufferlist& front, bufferlist& middle,
+			bufferlist& data)
+{
   // make message
   Message *m = 0;
   int type = header.type;

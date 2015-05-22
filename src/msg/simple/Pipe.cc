@@ -1799,7 +1799,9 @@ void Pipe::writer()
 	// prepare everything, the message has alread been signed
 	ceph_msg_header& header = m->get_header();
 	ceph_msg_footer& footer = m->get_footer();
-	bufferlist front, middle, data;
+	bufferlist& front = m->get_payload();
+        bufferlist& middle = m->get_middle();
+        bufferlist& data = m->get_data();
 
 	// if receiver supports compression, and this message does need compression
 	if ((features & CEPH_FEATURE_MSG_COMPRESS) &&
@@ -1812,7 +1814,7 @@ void Pipe::writer()
                                << " data_len=" << m->get_data().length()
                                << " header.data_len=" << header.data_len
                                << dendl;
-          m->compress(msgr->crcflags, header, footer, front, middle, data);
+          m->compress(msgr->crcflags);
           ldout(msgr->cct, 20) << __func__ << " AFTER compression:\n"
                                << " front_len=" << m->get_payload().length()
                                << " header.front_len=" << header.front_len
@@ -1827,6 +1829,8 @@ void Pipe::writer()
           middle = m->get_middle();
           data = m->get_data();
 	}
+        
+        m->calc_crc(msgr->crcflags);
 
 	// Now that we have all the crcs calculated, handle the
 	// digital signature for the message, if the pipe has session
@@ -1840,8 +1844,6 @@ void Pipe::writer()
 	    ldout(msgr->cct, 20) << "writer failed to sign seq # " << header.seq
 				 << "): sig = " << footer.sig << dendl;
 	  } else {
-            ceph_msg_header& header = m->get_header();
-            ceph_msg_footer& footer = m->get_footer();
 	    ldout(msgr->cct, 20) << "writer signed seq # " << header.seq
 				 << "): sig = " << footer.sig << dendl;
 	  }
@@ -2092,44 +2094,15 @@ int Pipe::read_message(Message **pm, AuthSessionHandler* auth_handler)
   
   aborted = (footer.flags & CEPH_MSG_FOOTER_COMPLETE) == 0;
 
+  // verify crc
+  if (Message::verify_crc(msgr->cct, msgr->crcflags, header,
+                                   footer, front, middle, data)) {
+    ret = -EINVAL;
+    goto out_dethrottle;
+  }
+
   // decompress message
   if (header.flags != 0) {
-    // verify crc before inflating
-    if ((msgr->crcflags & MSG_CRC_HEADER) != 0 &&
-        (footer.flags & CEPH_MSG_FOOTER_NOHEADERCRC) == 0) {
-      __u32 front_crc = front.crc32c(0);
-      __u32 middle_crc = middle.crc32c(0);
-
-      if (front_crc != footer.front_crc) {
-        ldout(msgr->cct, 0) << "bad crc in front " << front_crc << " != exp " << footer.front_crc << dendl;
-        ldout(msgr->cct, 20) << " ";
-        front.hexdump(*_dout);
-        *_dout << dendl;
-        ret = -EBADMSG;
-        goto out_dethrottle;
-      }
-      if (middle_crc != footer.middle_crc) {
-        ldout(msgr->cct, 0) << "bad crc in middle " << middle_crc << " != exp " << footer.middle_crc << dendl;
-        ldout(msgr->cct, 20) << " ";
-        middle.hexdump(*_dout);
-        *_dout << dendl;
-        ret = -EBADMSG;
-        goto out_dethrottle;
-      }
-    }
-    if ((msgr->crcflags & MSG_CRC_DATA) != 0 &&
-        (footer.flags & CEPH_MSG_FOOTER_NODATACRC) == 0) {
-      __u32 data_crc = data.crc32c(0);
-      if (data_crc != footer.data_crc) {
-	ldout(msgr->cct, 0) << "bad crc in data " << data_crc << " != exp " << footer.data_crc << dendl;
-	ldout(msgr->cct, 20) << " ";
-	data.hexdump(*_dout);
-	*_dout << dendl;
-        ret = -EBADMSG;
-        goto out_dethrottle;
-      }
-    }
-
     ldout(msgr->cct, 20) << "decompressing incoming message" << dendl;
     ldout(msgr->cct, 20) << __func__ << " BEFORE decompression:\n"
                          << " front_len=" << front.length()
