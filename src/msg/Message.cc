@@ -263,7 +263,6 @@ void Message::_compress_encode(bufferlist &in_bl)
   in_bl.compress(buffer::ALG_LZ4, compressed_bl);
 
   ::encode(in_bl.length(), out_bl);
-  ::encode(in_bl.crc32c(0), out_bl);
   ::encode(compressed_bl, out_bl);
 
   in_bl.claim(out_bl);
@@ -304,22 +303,17 @@ void Message::compress(int crcflags)
 int Message::_decompress_decode(bufferlist &in_bl, bufferlist &out_bl)
 {
   unsigned orig_len;
-  __le32 orig_crc;
   bufferlist compressed_bl;
 
   try {
     bufferlist::iterator it = in_bl.begin();
     ::decode(orig_len, it);
-    ::decode(orig_crc, it);
     ::decode(compressed_bl, it);
   } catch (const buffer::error &err) {
     return -EBADMSG;
   }
 
   compressed_bl.decompress(buffer::ALG_LZ4, out_bl, orig_len);
-
-  if (orig_crc != out_bl.crc32c(0))
-    return -EBADMSG;
 
   return 0;
 }
