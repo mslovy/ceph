@@ -105,7 +105,8 @@ ostream &operator<<(ostream &lhs, const ECBackend::ReadOp &rhs)
 	     << ", priority=" << rhs.priority
 	     << ", obj_to_source=" << rhs.obj_to_source
 	     << ", source_to_obj=" << rhs.source_to_obj
-	     << ", in_progress=" << rhs.in_progress << ")";
+	     << ", in_progress=" << rhs.in_progress
+	     << ", start=" << rhs.start << ")";
 }
 
 void ECBackend::ReadOp::dump(Formatter *f) const
@@ -135,6 +136,7 @@ ostream &operator<<(ostream &lhs, const ECBackend::Op &rhs)
   }
   lhs << " pending_commit=" << rhs.pending_commit
       << " pending_apply=" << rhs.pending_apply
+      << " start=" << rhs.start
       << ")";
   return lhs;
 }
@@ -1027,7 +1029,9 @@ shard_to_read_map.find(from);
   if (!rop.in_progress.empty()) {
     dout(10) << __func__ << " readop not complete: " << rop << dendl;
   } else {
-    dout(10) << __func__ << " readop complete: " << rop << dendl;
+    utime_t latency = ceph_clock_now(NULL) - rop.start;
+    get_parent()->get_logger()->tinc(l_osd_ec_op_r_lat, latency);
+    dout(10) << __func__ << " readop complete: " << rop << " lat " << latency << dendl;
     complete_read_op(rop, m);
   }
 }
@@ -1264,6 +1268,8 @@ void ECBackend::submit_transaction(
   op->tid = tid;
   op->reqid = reqid;
   op->client_op = client_op;
+
+  op->start = ceph_clock_now(NULL);
   
   op->t = static_cast<ECTransaction*>(_t);
 
@@ -1411,6 +1417,7 @@ void ECBackend::start_read_op(
   op.tid = tid;
   op.to_read.swap(to_read);
   op.op = _op;
+  op.start = ceph_clock_now(NULL);
   dout(10) << __func__ << ": starting " << op << dendl;
 
   map<pg_shard_t, ECSubRead> messages;
@@ -1525,12 +1532,15 @@ ECUtil::HashInfoRef ECBackend::get_hash_info(
 void ECBackend::check_op(Op *op)
 {
   if (op->pending_apply.empty() && op->on_all_applied) {
-    dout(10) << __func__ << " Calling on_all_applied on " << *op << dendl;
+    utime_t latency = ceph_clock_now(NULL) - op->start;
+    dout(10) << __func__ << " Calling on_all_applied on " << *op << " lat " << latency << dendl;
     op->on_all_applied->complete(0);
     op->on_all_applied = 0;
   }
   if (op->pending_commit.empty() && op->on_all_commit) {
-    dout(10) << __func__ << " Calling on_all_commit on " << *op << dendl;
+    utime_t latency = ceph_clock_now(NULL) - op->start;
+    dout(10) << __func__ << " Calling on_all_commit on " << *op << " lat " << latency << dendl;
+    get_parent()->get_logger()->tinc(l_osd_ec_op_w_lat, latency);
     op->on_all_commit->complete(0);
     op->on_all_commit = 0;
   }
@@ -1639,7 +1649,9 @@ struct CallClientContexts :
     ECBackend::ClientAsyncReadStatus *status,
     const list<pair<boost::tuple<uint64_t, uint64_t, uint32_t>,
 		    pair<bufferlist*, Context*> > > &to_read)
-    : ec(ec), status(status), to_read(to_read) {}
+    : ec(ec), status(status), to_read(to_read)
+  {
+  }
   void finish(pair<RecoveryMessages *, ECBackend::read_result_t &> &in) {
     ECBackend::read_result_t &res = in.second;
     assert(res.returned.size() == to_read.size());

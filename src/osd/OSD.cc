@@ -2085,6 +2085,8 @@ void OSD::create_logger()
   osd_plb.add_time_avg(l_osd_op_rw_rlat,"op_rw_rlat");  // client rmw readable/applied latency
   osd_plb.add_time_avg(l_osd_op_rw_lat, "op_rw_latency");   // client rmw latency
   osd_plb.add_time_avg(l_osd_op_rw_process_lat, "op_rw_process_latency");   // client rmw process latency
+  osd_plb.add_time_avg(l_osd_ec_op_r_lat, "ec_op_r_latency");   // client rmw process latency
+  osd_plb.add_time_avg(l_osd_ec_op_w_lat, "ec_op_w_latency");   // client rmw process latency
 
   osd_plb.add_u64_counter(l_osd_sop,       "subop");         // subops
   osd_plb.add_u64_counter(l_osd_sop_inb,   "subop_in_bytes");     // subop in bytes

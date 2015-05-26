@@ -298,6 +298,8 @@ public:
     void dump(Formatter *f) const;
 
     set<pg_shard_t> in_progress;
+ 
+    utime_t start;
   };
   friend struct FinishReadOp;
   void filter_read_op(
@@ -349,6 +351,8 @@ public:
     set<pg_shard_t> pending_apply;
 
     map<hobject_t, ECUtil::HashInfoRef> unstable_hash_infos;
+
+    utime_t start; 
     ~Op() {
       delete t;
       delete on_local_applied_sync;

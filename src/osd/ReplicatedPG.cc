@@ -2441,7 +2441,8 @@ void ReplicatedPG::log_op_stats(OpContext *ctx)
 	   << " inb " << inb
 	   << " outb " << outb
 	   << " rlat " << rlatency
-	   << " lat " << latency << dendl;
+	   << " lat " << latency
+	   << " plat " << process_latency << dendl;
 }
 
 void ReplicatedPG::do_sub_op(OpRequestRef op)
