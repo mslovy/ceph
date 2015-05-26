@@ -3474,6 +3474,14 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	  trimmed_read = true;
 	}
 
+	__le32 flags = 0;
+        if (g_conf->filestore_fadvise_vdi) {
+          if (pool.info.require_rollback()) {
+            flags |= CEPH_OSD_OP_FLAG_FADVISE_DONTNEED;
+          } else {
+            flags |= CEPH_OSD_OP_FLAG_FADVISE_WILLNEED;
+          }
+        }
 	// read into a buffer
 	bufferlist bl;
 	if (trimmed_read && op.extent.length == 0) {
@@ -3483,12 +3491,12 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	} else if (pool.info.require_rollback()) {
 	  ctx->pending_async_reads.push_back(
 	    make_pair(
-	      boost::make_tuple(op.extent.offset, op.extent.length, op.flags),
+	      boost::make_tuple(op.extent.offset, op.extent.length, op.flags | flags),
 	      make_pair(&osd_op.outdata, new FillInExtent(&op.extent.length))));
 	  dout(10) << " async_read noted for " << soid << dendl;
 	} else {
 	  int r = pgbackend->objects_read_sync(
-	    soid, op.extent.offset, op.extent.length, op.flags, &osd_op.outdata);
+	    soid, op.extent.offset, op.extent.length, op.flags | flags, &osd_op.outdata);
 	  if (r >= 0)
 	    op.extent.length = r;
 	  else {
@@ -4219,10 +4227,14 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	result = check_offset_and_length(op.extent.offset, op.extent.length, cct->_conf->osd_max_object_size);
 	if (result < 0)
 	  break;
+	__le32 flags = 0;
+        if (g_conf->filestore_fadvise_vdi) {
+          flags |= CEPH_OSD_OP_FLAG_FADVISE_DONTNEED;
+        }
 	if (pool.info.require_rollback()) {
-	  t->append(soid, op.extent.offset, op.extent.length, osd_op.indata, op.flags);
+	  t->append(soid, op.extent.offset, op.extent.length, osd_op.indata, op.flags | flags);
 	} else {
-	  t->write(soid, op.extent.offset, op.extent.length, osd_op.indata, op.flags);
+	  t->write(soid, op.extent.offset, op.extent.length, osd_op.indata, op.flags | flags);
 	}
 	write_update_size_and_usage(ctx->delta_stats, oi, ctx->modified_ranges,
 				    op.extent.offset, op.extent.length, true);

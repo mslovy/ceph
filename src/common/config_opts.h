@@ -111,6 +111,7 @@ SUBSYS(auth, 1, 5)
 SUBSYS(crypto, 1, 5)
 SUBSYS(finisher, 1, 1)
 SUBSYS(heartbeatmap, 1, 5)
+SUBSYS(wbthrottle, 1, 5)
 SUBSYS(perfcounter, 1, 5)
 SUBSYS(rgw, 1, 5)                 // log level for the Rados gateway
 SUBSYS(civetweb, 1, 10)
@@ -798,6 +799,7 @@ OPTION(filestore_zfs_snap, OPT_BOOL, false) // zfsonlinux is still unstable
 OPTION(filestore_fsync_flushes_journal_data, OPT_BOOL, false)
 OPTION(filestore_fiemap, OPT_BOOL, false)     // (try to) use fiemap
 OPTION(filestore_fadvise, OPT_BOOL, true)
+OPTION(filestore_fadvise_vdi, OPT_BOOL, true)
 
 // (try to) use extsize for alloc hint NOTE: extsize seems to trigger
 // data corruption in xfs prior to kernel 3.5.  filestore will

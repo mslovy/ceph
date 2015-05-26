@@ -2827,13 +2827,17 @@ int FileStore::read(
 	     << cpp_strerror(r) << dendl;
     return r;
   }
-
-  if (len == 0) {
+  
+  size_t filesize = 0;
+  if ((len == 0) || (op_flags & CEPH_OSD_OP_FLAG_FADVISE_WILLNEED)) {
     struct stat st;
     memset(&st, 0, sizeof(struct stat));
     int r = ::fstat(**fd, &st);
     assert(r == 0);
-    len = st.st_size;
+    filesize = st.st_size;
+  }
+  if (len == 0) {
+    len = filesize;
   }
 
 #ifdef HAVE_POSIX_FADVISE
@@ -2856,9 +2860,22 @@ int FileStore::read(
 
 #ifdef HAVE_POSIX_FADVISE
   if (op_flags & CEPH_OSD_OP_FLAG_FADVISE_DONTNEED)
-    posix_fadvise(**fd, offset, len, POSIX_FADV_DONTNEED);
+    posix_fadvise(**fd, 0, 0, POSIX_FADV_DONTNEED);
   if (op_flags & (CEPH_OSD_OP_FLAG_FADVISE_RANDOM | CEPH_OSD_OP_FLAG_FADVISE_SEQUENTIAL))
     posix_fadvise(**fd, offset, len, POSIX_FADV_NORMAL);
+  if (op_flags & CEPH_OSD_OP_FLAG_FADVISE_WILLNEED) {
+    uint64_t fetch_start = 0;
+    if (offset <= 128 * 1024) {
+       fetch_start = 0;
+    } else {
+       fetch_start = start - 128 * 1024;
+    }
+    int prefetch = (filesize - fetch_start);
+    if (prefetch > 384 * 1024) {
+      prefetch = 384 * 1024;
+    }
+    posix_fadvise(**fd, fetch_start, prefetch, POSIX_FADV_WILLNEED);
+  }
 #endif
 
   if (m_filestore_sloppy_crc && (!replaying || backend->can_checkpoint())) {
