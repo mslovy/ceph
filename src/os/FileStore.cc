@@ -2815,9 +2815,10 @@ int FileStore::read(
   bool allow_eio)
 {
   int got;
+  utime_t start = ceph_clock_now(NULL);
   tracepoint(objectstore, read_enter, cid.c_str(), offset, len);
 
-  dout(15) << "read " << cid << "/" << oid << " " << offset << "~" << len << dendl;
+  dout(15) << "FileStore::read " << cid << "/" << oid << " " << offset << "~" << len << dendl;
 
   FDRef fd;
   int r = lfn_open(cid, oid, false, &fd);
@@ -2873,7 +2874,7 @@ int FileStore::read(
   lfn_close(fd);
 
   dout(10) << "FileStore::read " << cid << "/" << oid << " " << offset << "~"
-	   << got << "/" << len << dendl;
+	   << got << "/" << len << " lat " << (ceph_clock_now(NULL) - start) <<dendl;
   if (g_conf->filestore_debug_inject_read_err &&
       debug_data_eio(oid)) {
     return -EIO;
