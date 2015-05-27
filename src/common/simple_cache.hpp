@@ -72,23 +72,78 @@ public:
     contents.erase(i);
   }
 
+  K last_key() {
+    Mutex::Locker l(lock);
+    return lru.back().first;
+  }
+  
+  list<K> last_N_keys(int n) {
+    Mutex::Locker l(lock);
+    list<K> keys;
+    if (n <= 0)
+      return keys;
+    for (typename list<pair<K, V> >::reverse_iterator p = lru.rbegin();
+         p != lru.rend();
+         ++p) {
+      keys.push_back(p->first);
+      if (keys.size() >= n)
+        break;
+    }
+    return keys;
+  }
+
+  list<K> get_range_keys(int offset, int len) {
+    Mutex::Locker l(lock);
+    list<K> keys;
+    if (len <= 0)
+      return keys;
+    if (offset < 0)
+      return last_N_keys(len);
+
+    typename list<pair<K, V> >::reverse_iterator p;
+    for (p = lru.rbegin(); p != lru.rend(); ++p) {
+      if (offset-- == 0)
+        break;
+    }
+    for (; p != lru.rend(); ++p) {
+      keys.push_back(p->first);
+      if (keys.size() >= len)
+        break;
+    }
+    return keys;
+  }
+
+  void clear() {
+    Mutex::Locker l(lock);
+    lru.clear();
+    contents.clear();
+  }
+
+  uint32_t size() {
+    Mutex::Locker l(lock);
+    return lru.size();
+  }
+
   void set_size(size_t new_size) {
     Mutex::Locker l(lock);
     max_size = new_size;
     trim_cache();
   }
 
-  bool lookup(K key, V *out) {
+  bool lookup(K key, V *out, bool reorder = true) {
     Mutex::Locker l(lock);
     typename list<pair<K, V> >::iterator loc = contents.count(key) ?
       contents[key] : lru.end();
     if (loc != lru.end()) {
-      *out = loc->second;
-      lru.splice(lru.begin(), lru, loc);
+      if (out)
+        *out = loc->second;
+      if (reorder)
+        lru.splice(lru.begin(), lru, loc);
       return true;
     }
     if (pinned.count(key)) {
-      *out = pinned[key];
+      if (out)
+        *out = pinned[key];
       return true;
     }
     return false;

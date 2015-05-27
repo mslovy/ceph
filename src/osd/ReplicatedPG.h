@@ -897,8 +897,10 @@ protected:
 
   void agent_setup();       ///< initialize agent state
   bool agent_work(int max); ///< entry point to do some agent work
-  bool agent_maybe_flush(ObjectContextRef& obc);  ///< maybe flush
-  bool agent_maybe_evict(ObjectContextRef& obc);  ///< maybe evict
+  bool suggests_hot_object(hobject_t& o, int type);
+  bool agent_maybe_flush(ObjectContextRef& obc, bool hot_object);  ///< maybe flush
+  bool agent_maybe_evict(ObjectContextRef& obc, bool hot_object);  ///< maybe evict
+  void hot_objects_update(OpRequestRef op);
 
   void agent_load_hit_sets();  ///< load HitSets, if needed
 
@@ -954,6 +956,8 @@ protected:
 
   // projected object info
   SharedLRU<hobject_t, ObjectContext> object_contexts;
+  // the hotest object accessed by client
+  SimpleLRU<hobject_t, bool> hot_objects;
   // map from oid.snapdir() to SnapSetContext *
   map<hobject_t, SnapSetContext*> snapset_contexts;
   Mutex snapset_contexts_lock;

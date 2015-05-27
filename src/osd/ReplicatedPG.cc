@@ -1220,6 +1220,7 @@ ReplicatedPG::ReplicatedPG(OSDService *o, OSDMapRef curmap,
     PGBackend::build_pg_backend(
       _pool.info, curmap, this, coll_t(p), coll_t::make_temp_coll(p), o->store, cct)),
   object_contexts(o->cct, g_conf->osd_pg_object_context_cache_count),
+  hot_objects(g_conf->osd_pg_hot_object_cache_count),
   snapset_contexts_lock("ReplicatedPG::snapset_contexts"),
   new_backfill(false),
   temp_seq(0),
@@ -1532,6 +1533,7 @@ void ReplicatedPG::do_op(OpRequestRef& op)
     if (missing_oid != hobject_t() && hit_set->contains(missing_oid))
       in_hit_set = true;
     hit_set->insert(oid);
+    hot_objects_update(op);
     if (hit_set->is_full() ||
 	hit_set_start_stamp + pool.info.hit_set_period <= m->get_recv_stamp()) {
       hit_set_persist();
@@ -10533,6 +10535,31 @@ void ReplicatedPG::agent_clear()
   agent_state.reset(NULL);
 }
 
+bool ReplicatedPG::suggests_hot_object(hobject_t& o, int type)
+{
+  if (!hot_objects.lookup(o, NULL, false)) {
+    return false;
+  }
+  uint64_t divisor = pool.info.get_pg_num_divisor(info.pgid.pgid);
+  assert(divisor > 0);
+  uint64_t throttle = 0;
+  if (type == 0) {
+    uint64_t max_dirty_objects = pool.info.cache_target_dirty_ratio_micro *
+      pool.info.target_max_objects / 1000000;
+    throttle = max_dirty_objects / divisor;
+  } else {
+    uint64_t max_dirty_objects = pool.info.cache_target_full_ratio_micro *
+      pool.info.target_max_objects / 1000000;
+    throttle = max_dirty_objects / divisor;
+  }
+  dout(20) << __func__ << " throttle objects " << throttle
+           << " hot objects size " << hot_objects.size() << dendl;
+  if (throttle >= hot_objects.size() * 1.5) {
+    return true;
+  }
+  return false;
+}
+
 // Return false if no objects operated on since start of object hash space
 bool ReplicatedPG::agent_work(int start_max)
 {
@@ -10601,6 +10628,8 @@ bool ReplicatedPG::agent_work(int start_max)
       osd->logger->inc(l_osd_agent_skip);
       continue;
     }
+    bool flush_hot_object = suggests_hot_object(*p, 0);
+    bool evict_hot_object = suggests_hot_object(*p, 1);
     ObjectContextRef obc = get_object_context(*p, false, NULL);
     if (!obc) {
       // we didn't flush; we may miss something here.
@@ -10638,10 +10667,10 @@ bool ReplicatedPG::agent_work(int start_max)
     }
 
     if (agent_state->flush_mode != TierAgentState::FLUSH_MODE_IDLE &&
-	agent_maybe_flush(obc))
+	agent_maybe_flush(obc, flush_hot_object))
       ++started;
     if (agent_state->evict_mode != TierAgentState::EVICT_MODE_IDLE &&
-	agent_maybe_evict(obc))
+	agent_maybe_evict(obc, evict_hot_object))
       ++started;
     if (started >= start_max) {
       // If finishing early, set "next" to the next object
@@ -10763,7 +10792,7 @@ struct C_AgentFlushStartStop : public Context {
   }
 };
 
-bool ReplicatedPG::agent_maybe_flush(ObjectContextRef& obc)
+bool ReplicatedPG::agent_maybe_flush(ObjectContextRef& obc, bool hot_object)
 {
   if (!obc->obs.oi.is_dirty()) {
     dout(20) << __func__ << " skip (clean) " << obc->obs.oi << dendl;
@@ -10782,8 +10811,12 @@ bool ReplicatedPG::agent_maybe_flush(ObjectContextRef& obc)
     (agent_state->evict_mode == TierAgentState::EVICT_MODE_FULL);
   if (!evict_mode_full &&
       obc->obs.oi.soid.snap == CEPH_NOSNAP &&  // snaps immutable; don't delay
-      (ob_local_mtime + utime_t(pool.info.cache_min_flush_age, 0) > now)) {
-    dout(20) << __func__ << " skip (too young) " << obc->obs.oi << dendl;
+      ((ob_local_mtime + utime_t(pool.info.cache_min_flush_age, 0) > now) || hot_object)) {
+    if (hot_object) {
+      dout(20) << __func__ << " skip (hot object) " << obc->obs.oi << dendl;
+    } else {
+      dout(20) << __func__ << " skip (too young) " << obc->obs.oi << dendl;
+    }
     osd->logger->inc(l_osd_agent_skip);
     return false;
   }
@@ -10815,7 +10848,7 @@ bool ReplicatedPG::agent_maybe_flush(ObjectContextRef& obc)
   return true;
 }
 
-bool ReplicatedPG::agent_maybe_evict(ObjectContextRef& obc)
+bool ReplicatedPG::agent_maybe_evict(ObjectContextRef& obc, bool hot_object)
 {
   const hobject_t& soid = obc->obs.oi.soid;
   if (obc->obs.oi.is_dirty()) {
@@ -10840,7 +10873,11 @@ bool ReplicatedPG::agent_maybe_evict(ObjectContextRef& obc)
   }
 
   if (agent_state->evict_mode != TierAgentState::EVICT_MODE_FULL) {
-    // is this object old and/or cold enough?
+     // is this object old and/or cold enough?
+    if (hot_object) {
+      dout(20) << __func__ << " skip (hot object) " << obc->obs.oi << dendl;
+      return false;
+    }
     int atime = -1, temp = 0;
     if (hit_set)
       agent_estimate_atime_temp(soid, &atime, NULL /*FIXME &temp*/);
@@ -10915,6 +10952,27 @@ bool ReplicatedPG::agent_maybe_evict(ObjectContextRef& obc)
   osd->logger->inc(l_osd_tier_evict);
   osd->logger->inc(l_osd_agent_evict);
   return true;
+}
+
+void ReplicatedPG::hot_objects_update(OpRequestRef op)
+{
+  MOSDOp *m = static_cast<MOSDOp*>(op->get_req()); 
+  hobject_t soid(m->get_oid(),
+    m->get_object_locator().key,
+    m->get_snapid(),
+    m->get_pg().ps(),
+    m->get_object_locator().get_pool(),
+    m->get_object_locator().nspace); 
+  for (vector<OSDOp>::iterator p = m->ops.begin(); p != m->ops.end(); ++p) {
+    ceph_osd_op& op = p->op;
+    if (op.op == CEPH_OSD_OP_READ || op.op == CEPH_OSD_OP_WRITE ||
+        op.op == CEPH_OSD_OP_STAT || op.op == CEPH_OSD_OP_APPEND) {
+      if (!hot_objects.lookup(soid, NULL)) {
+        hot_objects.add(soid, true); 
+      }
+      break;
+    }
+  }
 }
 
 void ReplicatedPG::agent_stop()
