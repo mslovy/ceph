@@ -1777,6 +1777,13 @@ bool ReplicatedPG::maybe_handle_cache(OpRequestRef op,
 	     << " in_hit_set " << (int)in_hit_set
 	     << dendl;
 
+  osd->logger->inc(l_osd_op_tier_total);
+  if (op->may_write()) {
+    osd->logger->inc(l_osd_op_tier_w_total);
+  }
+  if (op->may_read()) {
+    osd->logger->inc(l_osd_op_tier_r_total);
+  }
   // if it is write-ordered and blocked, stop now
   if (obc.get() && obc->is_blocked() && write_ordered) {
     // we're already doing something with this object
@@ -1790,15 +1797,23 @@ bool ReplicatedPG::maybe_handle_cache(OpRequestRef op,
   }
 
   if (obc.get() && obc->obs.exists) {
-    osd->logger->inc(l_osd_op_cache_hit);
+    osd->logger->inc(l_osd_op_tier_hit);
+    if (op->may_write()) {
+      osd->logger->inc(l_osd_op_tier_w_hit);
+    }
+    if (op->may_read()) {
+      osd->logger->inc(l_osd_op_tier_r_hit);
+    }
     return false;
   }
 
   MOSDOp *m = static_cast<MOSDOp*>(op->get_req());
   const object_locator_t& oloc = m->get_object_locator();
 
+  OpRequestRef src_op = op;
+
   if (must_promote || op->need_promote()) {
-    promote_object(obc, missing_oid, oloc, op);
+    promote_object(obc, missing_oid, oloc, op, src_op);
     return true;
   }
 
@@ -1829,7 +1844,7 @@ bool ReplicatedPG::maybe_handle_cache(OpRequestRef op,
       return false;
     }
     if (op->may_write() || write_ordered || !hit_set) {
-      promote_object(obc, missing_oid, oloc, op);
+      promote_object(obc, missing_oid, oloc, op, src_op);
       return true;
     }
 
@@ -1846,19 +1861,19 @@ bool ReplicatedPG::maybe_handle_cache(OpRequestRef op,
     // Promote too?
     switch (pool.info.min_read_recency_for_promote) {
     case 0:
-      promote_object(obc, missing_oid, oloc, promote_op);
+      promote_object(obc, missing_oid, oloc, promote_op, src_op);
       break;
     case 1:
       // Check if in the current hit set
       if (in_hit_set) {
-	promote_object(obc, missing_oid, oloc, promote_op);
+	promote_object(obc, missing_oid, oloc, promote_op, src_op);
       } else if (!can_proxy_read) {
 	do_cache_redirect(op);
       }
       break;
     default:
       if (in_hit_set) {
-	promote_object(obc, missing_oid, oloc, promote_op);
+	promote_object(obc, missing_oid, oloc, promote_op, src_op);
       } else {
 	// Check if in other hit sets
 	map<time_t,HitSetRef>::iterator itor;
@@ -1870,7 +1885,7 @@ bool ReplicatedPG::maybe_handle_cache(OpRequestRef op,
 	  }
 	}
 	if (in_other_hit_sets) {
-	  promote_object(obc, missing_oid, oloc, promote_op);
+	  promote_object(obc, missing_oid, oloc, promote_op, src_op);
 	} else if (!can_proxy_read) {
 	  do_cache_redirect(op);
 	}
@@ -1887,7 +1902,7 @@ bool ReplicatedPG::maybe_handle_cache(OpRequestRef op,
     // TODO: clean this case up
     if (!obc.get() && r == -ENOENT) {
       // we don't have the object and op's a read
-      promote_object(obc, missing_oid, oloc, op);
+      promote_object(obc, missing_oid, oloc, op, src_op);
       return true;
     }
     if (!r) { // it must be a write
@@ -1909,7 +1924,7 @@ bool ReplicatedPG::maybe_handle_cache(OpRequestRef op,
       if (can_skip_promote(op)) {
 	return false;
       }
-      promote_object(obc, missing_oid, oloc, op);
+      promote_object(obc, missing_oid, oloc, op, src_op);
       return true;
     }
 
@@ -1929,7 +1944,7 @@ bool ReplicatedPG::maybe_handle_cache(OpRequestRef op,
       if (can_skip_promote(op)) {
 	return false;
       }
-      promote_object(obc, missing_oid, oloc, op);
+      promote_object(obc, missing_oid, oloc, op, src_op);
       return true;
     }
 
@@ -2153,7 +2168,8 @@ public:
 void ReplicatedPG::promote_object(ObjectContextRef obc,
 				  const hobject_t& missing_oid,
 				  const object_locator_t& oloc,
-				  OpRequestRef op)
+				  OpRequestRef op,
+				  OpRequestRef src_op)
 {
   hobject_t hoid = obc ? obc->obs.oi.soid : missing_oid;
   assert(hoid != hobject_t());
@@ -2188,6 +2204,14 @@ void ReplicatedPG::promote_object(ObjectContextRef obc,
 
   if (op)
     wait_for_blocked_object(obc->obs.oi.soid, op);
+  if (src_op) {
+    if (src_op->may_write()) {
+      osd->logger->inc(l_osd_tier_w_promote);
+    }
+    if (src_op->may_read()) {
+      osd->logger->inc(l_osd_tier_r_promote);
+    }
+  }
 }
 
 void ReplicatedPG::execute_ctx(OpContext *ctx)
@@ -2397,6 +2421,7 @@ void ReplicatedPG::log_op_stats(OpContext *ctx)
   latency -= ctx->op->get_req()->get_recv_stamp();
   utime_t process_latency = now;
   process_latency -= ctx->op->get_dequeued_time();
+  utime_t blocked_latency = ctx->op->get_dequeued_time() - ctx->op->get_first_dequeued_time();
 
   utime_t rlatency;
   if (ctx->readable_stamp != utime_t()) {
@@ -2437,11 +2462,30 @@ void ReplicatedPG::log_op_stats(OpContext *ctx)
   } else
     assert(0);
 
+  for (vector<OSDOp>::iterator p = m->ops.begin(); p != m->ops.end(); ++p) {
+    ceph_osd_op& op = p->op;
+    if (op.op == CEPH_OSD_OP_READ || op.op == CEPH_OSD_OP_STAT) {
+      osd->logger->tinc(l_osd_client_op_r_lat, latency);
+      osd->logger->tinc(l_osd_client_op_r_process_lat, process_latency);
+      if (!blocked_latency.is_zero())
+        osd->logger->tinc(l_osd_client_op_r_blocked_lat, blocked_latency);
+      break;
+    }
+    else if (op.op == CEPH_OSD_OP_WRITE || op.op == CEPH_OSD_OP_APPEND) {
+      osd->logger->tinc(l_osd_client_op_w_lat, latency);
+      osd->logger->tinc(l_osd_client_op_w_process_lat, process_latency);
+      if (!blocked_latency.is_zero())
+        osd->logger->tinc(l_osd_client_op_w_blocked_lat, blocked_latency);
+      break;
+    }
+  }
+  
   dout(15) << "log_op_stats " << *m
 	   << " inb " << inb
 	   << " outb " << outb
 	   << " rlat " << rlatency
 	   << " lat " << latency
+	   << " blocked " << blocked_latency
 	   << " plat " << process_latency << dendl;
 }
 

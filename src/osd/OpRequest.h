@@ -105,6 +105,7 @@ public:
   }
   bool send_map_update;
   epoch_t sent_epoch;
+  utime_t first_dequeued_time;
   Message *get_req() const { return request; }
   bool been_queued_for_pg() { return hit_flag_points & flag_queued_for_pg; }
   bool been_reached_pg() { return hit_flag_points & flag_reached_pg; }
@@ -158,6 +159,12 @@ public:
     dequeued_time = deq_time;
   }
 
+  utime_t get_first_dequeued_time() const {
+    return first_dequeued_time;
+  }
+  void set_first_dequeued_time(utime_t deq_time) {
+    first_dequeued_time = deq_time;
+  }
   osd_reqid_t get_reqid() const {
     return reqid;
   }
