@@ -1769,8 +1769,9 @@ void ECBackend::objects_read_async(
     offsets.push_back(boost::make_tuple(tmp.first, tmp.second, i->first.get<2>()));
     // if the read length is not more than sinfo.get_stripe_width() * partial_read_ratio
     // maybe we could read the chunk from partial shards
-    if ((i->first.get<0>() % sinfo.get_chunk_size() == 0 && i->first.get<1>() <= sinfo.get_stripe_width() * partial_read_ratio) || 
-        (i->first.get<1>() <= (sinfo.get_stripe_width() - sinfo.get_chunk_size()) * partial_read_ratio)) {
+    if ((i->first.get<1>() != 0) &&
+        ((i->first.get<0>() % sinfo.get_chunk_size() == 0 && i->first.get<1>() <= sinfo.get_stripe_width() * partial_read_ratio) ||
+         (i->first.get<1>() <= (sinfo.get_stripe_width() - sinfo.get_chunk_size()) * partial_read_ratio))) {
       set<int> have;
       map<shard_id_t, pg_shard_t> health_shards;
       get_no_missing_read_shards(hoid, have, health_shards);
