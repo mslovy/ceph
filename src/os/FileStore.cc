@@ -2892,6 +2892,10 @@ int FileStore::read(
 
   dout(10) << "FileStore::read " << cid << "/" << oid << " " << offset << "~"
 	   << got << "/" << len << " lat " << (ceph_clock_now(NULL) - start) <<dendl;
+  if (got != len) {
+    dout(0) << "FileStore::read error " << cid << "/" << oid << " " << offset << "~"
+	     << got << "/" << len << " lat " << (ceph_clock_now(NULL) - start) <<dendl;
+  }
   if (g_conf->filestore_debug_inject_read_err &&
       debug_data_eio(oid)) {
     return -EIO;
