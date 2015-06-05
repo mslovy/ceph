@@ -1303,7 +1303,7 @@ protected:
    */
   void start_copy(CopyCallback *cb, ObjectContextRef obc, hobject_t src,
 		  object_locator_t oloc, version_t version, unsigned flags,
-		  bool mirror_snapset);
+		  bool mirror_snapset, OpRequestRef op);
   void process_copy_chunk(hobject_t oid, ceph_tid_t tid, int r);
   void _write_copy_chunk(CopyOpRef cop, PGBackend::PGTransaction *t);
   uint64_t get_copy_chunk_size() const {
