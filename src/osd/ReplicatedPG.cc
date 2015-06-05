@@ -2424,6 +2424,7 @@ void ReplicatedPG::log_op_stats(OpContext *ctx)
   utime_t process_latency = now;
   process_latency -= ctx->op->get_dequeued_time();
   utime_t blocked_latency = ctx->op->get_dequeued_time() - ctx->op->get_first_dequeued_time();
+  utime_t queue_latency = ctx->op->get_first_dequeued_time() - ctx->op->get_req()->get_recv_stamp();
 
   utime_t rlatency;
   if (ctx->readable_stamp != utime_t()) {
@@ -2447,6 +2448,7 @@ void ReplicatedPG::log_op_stats(OpContext *ctx)
     osd->logger->inc(l_osd_op_rw_outb, outb);
     osd->logger->tinc(l_osd_op_rw_lat, latency);
     osd->logger->tinc(l_osd_op_rw_process_lat, process_latency);
+    osd->logger->tinc(l_osd_op_rw_q_lat, queue_latency);
     if (rlatency != utime_t())
       osd->logger->tinc(l_osd_op_rw_rlat, rlatency);
   } else if (op->may_read()) {
@@ -2454,11 +2456,13 @@ void ReplicatedPG::log_op_stats(OpContext *ctx)
     osd->logger->inc(l_osd_op_r_outb, outb);
     osd->logger->tinc(l_osd_op_r_lat, latency);
     osd->logger->tinc(l_osd_op_r_process_lat, process_latency);
+    osd->logger->tinc(l_osd_op_r_q_lat, queue_latency);
   } else if (op->may_write() || op->may_cache()) {
     osd->logger->inc(l_osd_op_w);
     osd->logger->inc(l_osd_op_w_inb, inb);
     osd->logger->tinc(l_osd_op_w_lat, latency);
     osd->logger->tinc(l_osd_op_w_process_lat, process_latency);
+    osd->logger->tinc(l_osd_op_w_q_lat, queue_latency);
     if (rlatency != utime_t())
       osd->logger->tinc(l_osd_op_w_rlat, rlatency);
   } else
@@ -2468,6 +2472,7 @@ void ReplicatedPG::log_op_stats(OpContext *ctx)
     ceph_osd_op& op = p->op;
     if (op.op == CEPH_OSD_OP_READ || op.op == CEPH_OSD_OP_STAT) {
       osd->logger->tinc(l_osd_client_op_r_lat, latency);
+      osd->logger->tinc(l_osd_client_op_r_q_lat, queue_latency);
       osd->logger->tinc(l_osd_client_op_r_process_lat, process_latency);
       if (!blocked_latency.is_zero())
         osd->logger->tinc(l_osd_client_op_r_blocked_lat, blocked_latency);
@@ -2475,6 +2480,7 @@ void ReplicatedPG::log_op_stats(OpContext *ctx)
     }
     else if (op.op == CEPH_OSD_OP_WRITE || op.op == CEPH_OSD_OP_APPEND) {
       osd->logger->tinc(l_osd_client_op_w_lat, latency);
+      osd->logger->tinc(l_osd_client_op_w_q_lat, queue_latency);
       osd->logger->tinc(l_osd_client_op_w_process_lat, process_latency);
       if (!blocked_latency.is_zero())
         osd->logger->tinc(l_osd_client_op_w_blocked_lat, blocked_latency);
@@ -2487,6 +2493,7 @@ void ReplicatedPG::log_op_stats(OpContext *ctx)
 	   << " outb " << outb
 	   << " rlat " << rlatency
 	   << " lat " << latency
+	   << " queue " << queue_latency
 	   << " blocked " << blocked_latency
 	   << " plat " << process_latency << dendl;
 }

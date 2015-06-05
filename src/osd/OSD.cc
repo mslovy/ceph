@@ -2073,16 +2073,20 @@ void OSD::create_logger()
   osd_plb.add_u64_counter(l_osd_op_r,      "op_r");        // client reads
   osd_plb.add_u64_counter(l_osd_op_r_outb, "op_r_out_bytes");   // client read out bytes
   osd_plb.add_time_avg(l_osd_op_r_lat,  "op_r_latency");    // client read latency
+  osd_plb.add_time_avg(l_osd_op_r_q_lat, "op_r_queue_latency");   // client read queue latency
   osd_plb.add_time_avg(l_osd_op_r_process_lat, "op_r_process_latency");   // client read process latency
   osd_plb.add_time_avg(l_osd_client_op_r_lat,  "client_op_r_latency");    // client read latency
+  osd_plb.add_time_avg(l_osd_client_op_r_q_lat,  "client_op_r_queue_latency");    // client read queue latency
   osd_plb.add_time_avg(l_osd_client_op_r_process_lat,  "client_op_r_process_latency");    // client read latency
   osd_plb.add_time_avg(l_osd_client_op_r_blocked_lat,  "client_op_r_blocked_latency");    // client read blcoked latency
   osd_plb.add_u64_counter(l_osd_op_w,      "op_w");        // client writes
   osd_plb.add_u64_counter(l_osd_op_w_inb,  "op_w_in_bytes");    // client write in bytes
   osd_plb.add_time_avg(l_osd_op_w_rlat, "op_w_rlat");   // client write readable/applied latency
   osd_plb.add_time_avg(l_osd_op_w_lat,  "op_w_latency");    // client write latency
+  osd_plb.add_time_avg(l_osd_op_w_q_lat, "op_w_queue_latency");   // client write queue latency
   osd_plb.add_time_avg(l_osd_op_w_process_lat, "op_w_process_latency");   // client write process latency
   osd_plb.add_time_avg(l_osd_client_op_w_lat,  "client_op_w_latency");    // client write latency
+  osd_plb.add_time_avg(l_osd_client_op_w_q_lat,  "client_op_w_queue_latency");    // client write queue latency
   osd_plb.add_time_avg(l_osd_client_op_w_process_lat,  "client_op_w_process_latency");    // client write latency
   osd_plb.add_time_avg(l_osd_client_op_w_blocked_lat,  "client_op_w_blocked_latency");    // client write blcoked latency
   osd_plb.add_u64_counter(l_osd_op_rw,     "op_rw");       // client rmw
@@ -2090,8 +2094,10 @@ void OSD::create_logger()
   osd_plb.add_u64_counter(l_osd_op_rw_outb,"op_rw_out_bytes");  // client rmw out bytes
   osd_plb.add_time_avg(l_osd_op_rw_rlat,"op_rw_rlat");  // client rmw readable/applied latency
   osd_plb.add_time_avg(l_osd_op_rw_lat, "op_rw_latency");   // client rmw latency
+  osd_plb.add_time_avg(l_osd_op_rw_q_lat, "op_rw_queue_latency");   // client write queue latency
   osd_plb.add_time_avg(l_osd_op_rw_process_lat, "op_rw_process_latency");   // client rmw process latency
   osd_plb.add_time_avg(l_osd_ec_op_r_lat, "ec_op_r_latency");   // client rmw process latency
+  osd_plb.add_time_avg(l_osd_ec_op_partial_r_lat, "ec_op_partial_r_latency");   // client rmw process latency
   osd_plb.add_time_avg(l_osd_ec_op_w_lat, "ec_op_w_latency");   // client rmw process latency
 
   osd_plb.add_u64_counter(l_osd_sop,       "subop");         // subops

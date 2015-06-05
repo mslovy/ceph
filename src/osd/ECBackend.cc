@@ -1039,8 +1039,13 @@ shard_to_read_map.find(from);
           return;
         }
       }
+
       utime_t latency = ceph_clock_now(NULL) - rop.start;
       get_parent()->get_logger()->tinc(l_osd_ec_op_r_lat, latency);
+      if (rop.to_read.size() && rop.to_read.begin()->second.partial_read.front()) {
+        get_parent()->get_logger()->tinc(l_osd_ec_op_partial_r_lat, latency);
+      }
+   
       dout(10) << __func__ << " readop complete: " << rop << " lat " << latency << dendl;
       rop.in_progress.clear();
       complete_read_op(rop, m);
@@ -1050,6 +1055,9 @@ shard_to_read_map.find(from);
   } else {
     utime_t latency = ceph_clock_now(NULL) - rop.start;
     get_parent()->get_logger()->tinc(l_osd_ec_op_r_lat, latency);
+    if (rop.to_read.size() && rop.to_read.begin()->second.partial_read.front()) {
+      get_parent()->get_logger()->tinc(l_osd_ec_op_partial_r_lat, latency);
+    }
     dout(10) << __func__ << " readop complete: " << rop << " lat " << latency << dendl;
     complete_read_op(rop, m);
   }
