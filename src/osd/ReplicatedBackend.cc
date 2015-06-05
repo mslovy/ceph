@@ -636,7 +636,7 @@ void ReplicatedBackend::submit_transaction(
 void ReplicatedBackend::op_applied(
   InProgressOp *op)
 {
-  dout(10) << __func__ << ": " << op->tid << dendl;
+  dout(10) << __func__ << ": rep_tid=" << op->tid << dendl;
   if (op->op)
     op->op->mark_event("op_applied");
 
@@ -656,7 +656,7 @@ void ReplicatedBackend::op_applied(
 void ReplicatedBackend::op_commit(
   InProgressOp *op)
 {
-  dout(10) << __func__ << ": " << op->tid << dendl;
+  dout(10) << __func__ << ": rep_tid=" << op->tid << dendl;
   if (op->op)
     op->op->mark_event("op_commit");
 
@@ -694,12 +694,12 @@ void ReplicatedBackend::sub_op_modify_reply(OpRequestRef op)
       m = static_cast<MOSDOp *>(ip_op.op->get_req());
 
     if (m)
-      dout(7) << __func__ << ": tid " << ip_op.tid << " op " //<< *m
+      dout(7) << __func__ << ": rep_tid=" << ip_op.tid << " op " //<< *m
 	      << " ack_type " << (int)r->ack_type
 	      << " from " << from
 	      << dendl;
     else
-      dout(7) << __func__ << ": tid " << ip_op.tid << " (no op) "
+      dout(7) << __func__ << ": rep_tid=" << ip_op.tid << " (no op) "
 	      << " ack_type " << (int)r->ack_type
 	      << " from " << from
 	      << dendl;

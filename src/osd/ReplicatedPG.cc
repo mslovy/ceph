@@ -7233,7 +7233,7 @@ public:
 
 void ReplicatedPG::repop_all_applied(RepGather *repop)
 {
-  dout(10) << __func__ << ": repop tid " << repop->rep_tid << " all applied "
+  dout(10) << __func__ << ": rep_tid=" << repop->rep_tid << " all applied "
 	   << dendl;
   repop->all_applied = true;
   if (!repop->rep_aborted) {
@@ -7258,7 +7258,7 @@ public:
 
 void ReplicatedPG::repop_all_committed(RepGather *repop)
 {
-  dout(10) << __func__ << ": repop tid " << repop->rep_tid << " all committed "
+  dout(10) << __func__ << ": rep_tid=" << repop->rep_tid << " all committed "
 	   << dendl;
   repop->all_committed = true;
 
@@ -7445,7 +7445,7 @@ void ReplicatedPG::issue_repop(RepGather *repop)
     // replicate original op for parallel execution on replica
     assert(0 == "broken implementation, do not use");
   }
-  dout(7) << "issue_repop rep_tid " << repop->rep_tid
+  dout(7) << "issue_repop rep_tid=" << repop->rep_tid
           << " o " << soid
           << dendl;
 
@@ -7512,9 +7512,9 @@ ReplicatedPG::RepGather *ReplicatedPG::new_repop(OpContext *ctx, ObjectContextRe
 						 ceph_tid_t rep_tid)
 {
   if (ctx->op)
-    dout(10) << "new_repop rep_tid " << rep_tid << " on " << *ctx->op->get_req() << dendl;
+    dout(10) << "new_repop rep_tid=" << rep_tid << " on " << *ctx->op->get_req() << dendl;
   else
-    dout(10) << "new_repop rep_tid " << rep_tid << " (no op)" << dendl;
+    dout(10) << "new_repop rep_tid=" << rep_tid << " (no op)" << dendl;
 
   RepGather *repop = new RepGather(ctx, obc, rep_tid, info.last_complete);
 
@@ -8657,7 +8657,7 @@ void ReplicatedPG::apply_and_flush_repops(bool requeue)
   while (!repop_queue.empty()) {
     RepGather *repop = repop_queue.front();
     repop_queue.pop_front();
-    dout(10) << " canceling repop tid " << repop->rep_tid << dendl;
+    dout(10) << " canceling rep_tid=" << repop->rep_tid << dendl;
     repop->rep_aborted = true;
     if (repop->on_applied) {
       delete repop->on_applied;
