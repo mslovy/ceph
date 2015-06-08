@@ -243,6 +243,7 @@ enum {
   CEPH_OSD_RMW_FLAG_CACHE       = (1 << 6),
   CEPH_OSD_RMW_FLAG_PROMOTE     = (1 << 7),
   CEPH_OSD_RMW_FLAG_READ_ORDERED    = (1 << 8),
+  CEPH_OSD_RMW_FLAG_IGNORE_CACHE    = (1 << 9),
 };
 
 
