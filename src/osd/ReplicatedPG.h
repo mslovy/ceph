@@ -905,6 +905,7 @@ protected:
   bool agent_maybe_flush(ObjectContextRef& obc, bool hot_object);  ///< maybe flush
   bool agent_maybe_evict(ObjectContextRef& obc, bool hot_object);  ///< maybe evict
   void hot_objects_update(OpRequestRef op);
+  bool is_hot_objects(const hobject_t& o);
 
   void agent_load_hit_sets();  ///< load HitSets, if needed
 

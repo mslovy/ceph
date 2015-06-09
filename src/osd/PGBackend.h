@@ -165,6 +165,8 @@
        const hobject_t &hoid,
        bool can_create,
        map<string, bufferlist> *attrs=0) = 0;
+    
+     virtual bool is_hot_objects(const hobject_t& o) = 0;
 
      virtual bool is_blocked_object(const hobject_t &hoid) = 0;
 

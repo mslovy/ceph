@@ -1924,7 +1924,7 @@ void ECBackend::be_deep_scrub(
 
   // Look at whether the obc was in the cache for whether the object is warm or not
   uint32_t fadvise_flags = CEPH_OSD_OP_FLAG_FADVISE_SEQUENTIAL;
-  if (!get_parent()->get_obc(poid, false))
+  if (!get_parent()->is_hot_objects(poid))
     fadvise_flags |= CEPH_OSD_OP_FLAG_FADVISE_DONTNEED;
 
   while (true) {

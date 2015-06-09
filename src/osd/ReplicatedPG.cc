@@ -10546,6 +10546,14 @@ void ReplicatedPG::agent_clear()
   agent_state.reset(NULL);
 }
 
+bool ReplicatedPG::is_hot_objects(const hobject_t& o)
+{
+  if (hot_objects.lookup(o, NULL, false)) {
+    return true;
+  }
+  return false;
+}
+
 bool ReplicatedPG::suggests_hot_object(hobject_t& o, int type)
 {
   if (!hot_objects.lookup(o, NULL, false)) {
