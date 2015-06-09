@@ -1209,7 +1209,7 @@ bool PG::choose_acting(pg_shard_t &auth_log_shard_id)
   for (map<pg_shard_t, pg_info_t>::iterator p = all_info.begin();
        p != all_info.end();
        ++p) {
-    dout(10) << "calc_acting osd." << p->first << " " << p->second << dendl;
+    dout(0) << "calc_acting osd." << p->first << " " << p->second << dendl;
   }
 
   map<pg_shard_t, pg_info_t>::const_iterator auth_log_shard =
@@ -1217,13 +1217,13 @@ bool PG::choose_acting(pg_shard_t &auth_log_shard_id)
 
   if (auth_log_shard == all_info.end()) {
     if (up != acting) {
-      dout(10) << "choose_acting no suitable info found (incomplete backfills?),"
+      dout(0) << "choose_acting no suitable info found (incomplete backfills?),"
 	       << " reverting to up" << dendl;
       want_acting = up;
       vector<int> empty;
       osd->queue_want_pg_temp(info.pgid.pgid, empty);
     } else {
-      dout(10) << "choose_acting failed" << dendl;
+      dout(0) << "choose_acting failed" << dendl;
       assert(want_acting.empty());
     }
     return false;
@@ -1305,7 +1305,7 @@ bool PG::choose_acting(pg_shard_t &auth_log_shard_id)
       &want_acting_backfill,
       &want_primary,
       ss);
-  dout(10) << ss.str() << dendl;
+  dout(0) << ss.str() << dendl;
 
   unsigned num_want_acting = 0;
   for (vector<int>::iterator i = want.begin();
@@ -1323,7 +1323,7 @@ bool PG::choose_acting(pg_shard_t &auth_log_shard_id)
        (!(get_min_peer_features() & CEPH_FEATURE_OSD_MIN_SIZE_RECOVERY)) ||
        !cct->_conf->osd_allow_recovery_below_min_size)) {
     want_acting.clear();
-    dout(10) << "choose_acting failed, below min size" << dendl;
+    dout(0) << "choose_acting failed, below min size" << dendl;
     return false;
   }
 
@@ -1340,12 +1340,12 @@ bool PG::choose_acting(pg_shard_t &auth_log_shard_id)
   }
   if (!(*recoverable_predicate)(have)) {
     want_acting.clear();
-    dout(10) << "choose_acting failed, not recoverable" << dendl;
+    dout(0) << "choose_acting failed, not recoverable" << dendl;
     return false;
   }
 
   if (want != acting) {
-    dout(10) << "choose_acting want " << want << " != acting " << acting
+    dout(0) << "choose_acting want " << want << " != acting " << acting
 	     << ", requesting pg_temp change" << dendl;
     want_acting = want;
 
@@ -1361,7 +1361,7 @@ bool PG::choose_acting(pg_shard_t &auth_log_shard_id)
   }
   want_acting.clear();
   actingbackfill = want_acting_backfill;
-  dout(10) << "actingbackfill is " << actingbackfill << dendl;
+  dout(0) << "actingbackfill is " << actingbackfill << dendl;
   assert(backfill_targets.empty() || backfill_targets == want_backfill);
   if (backfill_targets.empty()) {
     // Caller is GetInfo
@@ -1381,7 +1381,7 @@ bool PG::choose_acting(pg_shard_t &auth_log_shard_id)
       assert(stray_set.find(*i) == stray_set.end());
     }
   }
-  dout(10) << "choose_acting want " << want << " (== acting) backfill_targets " 
+  dout(0) << "choose_acting want " << want << " (== acting) backfill_targets " 
 	   << want_backfill << dendl;
   return true;
 }

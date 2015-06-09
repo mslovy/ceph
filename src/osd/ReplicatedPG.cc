@@ -415,7 +415,11 @@ bool ReplicatedPG::is_degraded_or_backfilling_object(const hobject_t& soid)
 {
   if (pg_log.get_missing().missing.count(soid))
     return true;
-  assert(!actingbackfill.empty());
+  if(actingbackfill.empty()) {
+    dout(0) << __func__ << " up " << up << " acting " << " want_acting " << want_acting
+            << " actingbackfill " << actingbackfill << " actingset " << actingset << dendl;
+    assert(false);
+  }
   for (set<pg_shard_t>::iterator i = actingbackfill.begin();
        i != actingbackfill.end();
        ++i) {
