@@ -1884,7 +1884,8 @@ bool ReplicatedPG::maybe_handle_cache(OpRequestRef op,
 	// Check if in other hit sets
 	map<time_t,HitSetRef>::iterator itor;
 	bool in_other_hit_sets = false;
-	for (itor = agent_state->hit_set_map.begin(); itor != agent_state->hit_set_map.end(); ++itor) {
+        uint32_t count = pool.info.min_read_recency_for_promote > 0 ? pool.info.min_read_recency_for_promote - 1 : 0;
+	for (itor = agent_state->hit_set_map.begin(); itor != agent_state->hit_set_map.end() && count--; ++itor) {
 	  if (itor->second->contains(missing_oid)) {
 	    in_other_hit_sets = true;
 	    break;
@@ -10332,7 +10333,11 @@ void ReplicatedPG::hit_set_persist()
 
   if (agent_state) {
     agent_state->add_hit_set(info.hit_set.current_info.begin, hit_set);
-    hit_set_in_memory_trim();
+    uint32_t size = agent_state->hit_set_map.size();
+    if (agent_state->hit_set_map.size() >= pool.info.hit_set_count) {
+      size = pool.info.hit_set_count > 0 ? pool.info.hit_set_count - 1: 0;
+    }
+    hit_set_in_memory_trim(size);
   }
 
   // hold a ref until it is flushed to disk
@@ -10488,14 +10493,8 @@ void ReplicatedPG::hit_set_trim(RepGather *repop, unsigned max)
   }
 }
 
-void ReplicatedPG::hit_set_in_memory_trim()
+void ReplicatedPG::hit_set_in_memory_trim(uint32_t max_in_memory)
 {
-  unsigned max = pool.info.hit_set_count;
-  unsigned max_in_memory = pool.info.min_read_recency_for_promote > 0 ? pool.info.min_read_recency_for_promote - 1 : 0;
-
-  if (max_in_memory > max) {
-    max_in_memory = max;
-  }
   while (agent_state->hit_set_map.size() > max_in_memory) {
     agent_state->remove_oldest_hit_set();
   }
@@ -10734,7 +10733,7 @@ bool ReplicatedPG::agent_work(int start_max)
     agent_state->position = next;
 
   // Discard old in memory HitSets
-  hit_set_in_memory_trim();
+  hit_set_in_memory_trim(pool.info.hit_set_count);
 
   if (need_delay) {
     assert(agent_state->delaying == false);
@@ -10753,8 +10752,22 @@ void ReplicatedPG::agent_load_hit_sets()
     return;
   }
 
+  utime_t start = ceph_clock_now(NULL);
+  dout(10) << __func__ << " start hit_set_map size " << agent_state->hit_set_map.size()
+           << " hit_set history size " << info.hit_set.history.size() << dendl;
+  if (agent_state->hit_set_map.size() == info.hit_set.history.size()) {
+    bool abort = false;
+    for (list<pg_hit_set_info_t>::iterator p = info.hit_set.history.begin();
+         p != info.hit_set.history.end(); ++p) {
+       if(agent_state->hit_set_map.count(p->begin.sec()) == 0) {
+	  dout(10) << __func__ << " loading " << p->begin << "-"
+		   << p->end << dendl;
+          abort = true;
+       }
+    }
+    assert(!abort);
+  }
   if (agent_state->hit_set_map.size() < info.hit_set.history.size()) {
-    dout(10) << __func__ << dendl;
     for (list<pg_hit_set_info_t>::iterator p = info.hit_set.history.begin();
 	 p != info.hit_set.history.end(); ++p) {
       if (agent_state->hit_set_map.count(p->begin.sec()) == 0) {
@@ -10798,6 +10811,8 @@ void ReplicatedPG::agent_load_hit_sets()
       }
     }
   }
+  utime_t finish = ceph_clock_now(NULL);
+  dout(10) << __func__ << " finish " << " lat " << (finish - start)<< dendl;
 }
 
 struct C_AgentFlushStartStop : public Context {
