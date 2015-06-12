@@ -69,6 +69,12 @@ enum {
   l_os_bytes,
   l_os_apply_lat,
   l_os_queue_lat,
+  l_os_w_lat,
+  l_os_r_lat,
+  l_os_setkey_lat,
+  l_os_getkey_lat,
+  l_os_setattr_lat,
+  l_os_getattr_lat,
   l_os_last,
 };
 

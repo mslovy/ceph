@@ -603,6 +603,13 @@ FileStore::FileStore(const std::string &base, const std::string &jdev, osflagbit
   plb.add_u64_counter(l_os_j_full, "journal_full");
   plb.add_time_avg(l_os_queue_lat, "queue_transaction_latency_avg");
 
+  plb.add_time_avg(l_os_r_lat, "read_latency");
+  plb.add_time_avg(l_os_w_lat, "write_latency");
+  plb.add_time_avg(l_os_setattr_lat, "setattr_latency");
+  plb.add_time_avg(l_os_getattr_lat, "getattr_latency");
+  plb.add_time_avg(l_os_setkey_lat, "setkey_latency");
+  plb.add_time_avg(l_os_getkey_lat, "getkey_latency");
+
   logger = plb.create_perf_counters();
 
   g_ceph_context->get_perfcounters_collection()->add(logger);
@@ -2829,16 +2836,12 @@ int FileStore::read(
     return r;
   }
   
-  size_t filesize = 0;
-  if ((len == 0) || (op_flags & CEPH_OSD_OP_FLAG_FADVISE_WILLNEED)) {
+  if (len == 0) {
     struct stat st;
     memset(&st, 0, sizeof(struct stat));
     int r = ::fstat(**fd, &st);
     assert(r == 0);
-    filesize = st.st_size;
-  }
-  if (len == 0) {
-    len = filesize;
+    len = st.st_size;
   }
 
 #ifdef HAVE_POSIX_FADVISE
@@ -2847,6 +2850,16 @@ int FileStore::read(
   if (op_flags & CEPH_OSD_OP_FLAG_FADVISE_SEQUENTIAL)
     posix_fadvise(**fd, offset, len, POSIX_FADV_SEQUENTIAL);
 #endif
+
+  if (op_flags & CEPH_OSD_OP_FLAG_FADVISE_WILLNEED) {
+    uint64_t fetch_start = 0;
+    if (offset <= 128 * 1024) {
+       fetch_start = 0;
+    } else {
+       fetch_start = start - 128 * 1024;
+    }
+    posix_fadvise(**fd, fetch_start, 256 * 1024, POSIX_FADV_WILLNEED);
+  }
 
   bufferptr bptr(len);  // prealloc space for entire read
   got = safe_pread(**fd, bptr.c_str(), len, offset);
@@ -2864,19 +2877,6 @@ int FileStore::read(
     posix_fadvise(**fd, 0, 0, POSIX_FADV_DONTNEED);
   if (op_flags & (CEPH_OSD_OP_FLAG_FADVISE_RANDOM | CEPH_OSD_OP_FLAG_FADVISE_SEQUENTIAL))
     posix_fadvise(**fd, offset, len, POSIX_FADV_NORMAL);
-  if (op_flags & CEPH_OSD_OP_FLAG_FADVISE_WILLNEED) {
-    uint64_t fetch_start = 0;
-    if (offset <= 128 * 1024) {
-       fetch_start = 0;
-    } else {
-       fetch_start = start - 128 * 1024;
-    }
-    int prefetch = (filesize - fetch_start);
-    if (prefetch > 384 * 1024) {
-      prefetch = 384 * 1024;
-    }
-    posix_fadvise(**fd, fetch_start, prefetch, POSIX_FADV_WILLNEED);
-  }
 #endif
 
   if (m_filestore_sloppy_crc && (!replaying || backend->can_checkpoint())) {
@@ -2890,12 +2890,13 @@ int FileStore::read(
   }
 
   lfn_close(fd);
-
+  utime_t lat = ceph_clock_now(NULL) - start;
+  logger->tinc(l_os_r_lat, lat);
   dout(10) << "FileStore::read " << cid << "/" << oid << " " << offset << "~"
-	   << got << "/" << len << " lat " << (ceph_clock_now(NULL) - start) <<dendl;
+	   << got << "/" << len << " lat " << lat <<dendl;
   if (got != len) {
     dout(5) << "FileStore::read error " << cid << "/" << oid << " " << offset << "~"
-	     << got << "/" << len << " lat " << (ceph_clock_now(NULL) - start) <<dendl;
+	     << got << "/" << len << " lat " << lat <<dendl;
   }
   if (g_conf->filestore_debug_inject_read_err &&
       debug_data_eio(oid)) {
@@ -3026,6 +3027,7 @@ int FileStore::_write(coll_t cid, const ghobject_t& oid,
                      uint64_t offset, size_t len,
                      const bufferlist& bl, uint32_t fadvise_flags)
 {
+  utime_t start = ceph_clock_now(NULL);
   dout(15) << "write " << cid << "/" << oid << " " << offset << "~" << len << dendl;
   int r;
 
@@ -3073,7 +3075,9 @@ int FileStore::_write(coll_t cid, const ghobject_t& oid,
   lfn_close(fd);
 
  out:
-  dout(10) << "write " << cid << "/" << oid << " " << offset << "~" << len << " = " << r << dendl;
+  utime_t lat = ceph_clock_now(NULL) - start;
+  logger->tinc(l_os_w_lat, lat);
+  dout(10) << "write " << cid << "/" << oid << " " << offset << "~" << len << " = " << r << " lat " << lat << dendl;
   return r;
 }
 
@@ -3895,6 +3899,7 @@ bool FileStore::debug_mdata_eio(const ghobject_t &oid) {
 
 int FileStore::getattr(coll_t cid, const ghobject_t& oid, const char *name, bufferptr &bp)
 {
+  utime_t start = ceph_clock_now(NULL);
   tracepoint(objectstore, getattr_enter, cid.c_str());
   dout(15) << "getattr " << cid << "/" << oid << " '" << name << "'" << dendl;
   FDRef fd;
@@ -3930,7 +3935,9 @@ int FileStore::getattr(coll_t cid, const ghobject_t& oid, const char *name, buff
     r = bp.length();
   }
  out:
-  dout(10) << "getattr " << cid << "/" << oid << " '" << name << "' = " << r << dendl;
+  utime_t lat = ceph_clock_now(NULL) - start;
+  logger->tinc(l_os_getattr_lat, lat);
+  dout(10) << "getattr " << cid << "/" << oid << " '" << name << "' = " << r << " lat " << lat << dendl;
   assert(!m_filestore_fail_eio || r != -EIO);
   if (g_conf->filestore_debug_inject_read_err &&
       debug_mdata_eio(oid)) {
@@ -4016,6 +4023,7 @@ int FileStore::getattrs(coll_t cid, const ghobject_t& oid, map<string,bufferptr>
 int FileStore::_setattrs(coll_t cid, const ghobject_t& oid, map<string,bufferptr>& aset,
 			 const SequencerPosition &spos)
 {
+  utime_t start = ceph_clock_now(NULL);
   map<string, bufferlist> omap_set;
   set<string> omap_remove;
   map<string, bufferptr> inline_set;
@@ -4108,7 +4116,9 @@ int FileStore::_setattrs(coll_t cid, const ghobject_t& oid, map<string,bufferptr
  out_close:
   lfn_close(fd);
  out:
-  dout(10) << "setattrs " << cid << "/" << oid << " = " << r << dendl;
+  utime_t lat = ceph_clock_now(NULL) - start;
+  logger->tinc(l_os_setattr_lat, lat);
+  dout(10) << "setattrs " << cid << "/" << oid << " = " << r << " lat " << lat << dendl;
   return r;
 }
 
@@ -4659,6 +4669,7 @@ int FileStore::omap_get_header(
 
 int FileStore::omap_get_keys(coll_t c, const ghobject_t &hoid, set<string> *keys)
 {
+  utime_t start = ceph_clock_now(NULL);
   tracepoint(objectstore, omap_get_keys_enter, c.c_str());
   dout(15) << __func__ << " " << c << "/" << hoid << dendl;
   Index index;
@@ -4677,6 +4688,8 @@ int FileStore::omap_get_keys(coll_t c, const ghobject_t &hoid, set<string> *keys
     assert(!m_filestore_fail_eio || r != -EIO);
     return r;
   }
+  utime_t lat = ceph_clock_now(NULL) - start;
+  logger->tinc(l_os_getkey_lat, lat);
   tracepoint(objectstore, omap_get_keys_exit, 0);
   return 0;
 }
@@ -5019,6 +5032,7 @@ int FileStore::_omap_clear(coll_t cid, const ghobject_t &hoid,
 int FileStore::_omap_setkeys(coll_t cid, const ghobject_t &hoid,
 			     const map<string, bufferlist> &aset,
 			     const SequencerPosition &spos) {
+  utime_t start = ceph_clock_now(NULL);
   dout(15) << __func__ << " " << cid << "/" << hoid << dendl;
   Index index;
   int r = get_index(cid, &index);
@@ -5036,7 +5050,9 @@ int FileStore::_omap_setkeys(coll_t cid, const ghobject_t &hoid,
     }
   }
   r = object_map->set_keys(hoid, aset, &spos);
-  dout(20) << __func__ << " " << cid << "/" << hoid << " = " << r << dendl;
+  utime_t lat = ceph_clock_now(NULL) - start;
+  logger->tinc(l_os_setkey_lat, lat);
+  dout(20) << __func__ << " " << cid << "/" << hoid << " = " << r << " lat " << lat << dendl;
   return r;
 }
 

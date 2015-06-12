@@ -2485,23 +2485,25 @@ void ReplicatedPG::log_op_stats(OpContext *ctx)
   } else
     assert(0);
 
-  for (vector<OSDOp>::iterator p = m->ops.begin(); p != m->ops.end(); ++p) {
-    ceph_osd_op& op = p->op;
-    if (op.op == CEPH_OSD_OP_READ || op.op == CEPH_OSD_OP_STAT) {
-      osd->logger->tinc(l_osd_client_op_r_lat, latency);
-      osd->logger->tinc(l_osd_client_op_r_q_lat, queue_latency);
-      osd->logger->tinc(l_osd_client_op_r_process_lat, process_latency);
-      if (!blocked_latency.is_zero())
-        osd->logger->tinc(l_osd_client_op_r_blocked_lat, blocked_latency);
-      break;
-    }
-    else if (op.op == CEPH_OSD_OP_WRITE || op.op == CEPH_OSD_OP_APPEND) {
-      osd->logger->tinc(l_osd_client_op_w_lat, latency);
-      osd->logger->tinc(l_osd_client_op_w_q_lat, queue_latency);
-      osd->logger->tinc(l_osd_client_op_w_process_lat, process_latency);
-      if (!blocked_latency.is_zero())
-        osd->logger->tinc(l_osd_client_op_w_blocked_lat, blocked_latency);
-      break;
+  if (!pool.info.require_rollback()) {
+    for (vector<OSDOp>::iterator p = m->ops.begin(); p != m->ops.end(); ++p) {
+      ceph_osd_op& op = p->op;
+      if (op.op == CEPH_OSD_OP_READ || op.op == CEPH_OSD_OP_STAT) {
+        osd->logger->tinc(l_osd_client_op_r_lat, latency);
+        osd->logger->tinc(l_osd_client_op_r_q_lat, queue_latency);
+        osd->logger->tinc(l_osd_client_op_r_process_lat, process_latency);
+        if (!blocked_latency.is_zero())
+          osd->logger->tinc(l_osd_client_op_r_blocked_lat, blocked_latency);
+        break;
+      }
+      else if (op.op == CEPH_OSD_OP_WRITE || op.op == CEPH_OSD_OP_APPEND) {
+        osd->logger->tinc(l_osd_client_op_w_lat, latency);
+        osd->logger->tinc(l_osd_client_op_w_q_lat, queue_latency);
+        osd->logger->tinc(l_osd_client_op_w_process_lat, process_latency);
+        if (!blocked_latency.is_zero())
+          osd->logger->tinc(l_osd_client_op_w_blocked_lat, blocked_latency);
+        break;
+      }
     }
   }
   
@@ -3500,11 +3502,10 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	  trimmed_read = true;
 	}
 
+
 	__le32 flags = 0;
         if (g_conf->filestore_fadvise_vdi) {
-          if (pool.info.require_rollback()) {
-            flags |= CEPH_OSD_OP_FLAG_FADVISE_DONTNEED;
-          } else {
+          if (!pool.info.require_rollback()) {
             flags |= CEPH_OSD_OP_FLAG_FADVISE_WILLNEED;
           }
         }
@@ -4253,14 +4254,10 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	result = check_offset_and_length(op.extent.offset, op.extent.length, cct->_conf->osd_max_object_size);
 	if (result < 0)
 	  break;
-	__le32 flags = 0;
-        if (g_conf->filestore_fadvise_vdi) {
-          flags |= CEPH_OSD_OP_FLAG_FADVISE_DONTNEED;
-        }
 	if (pool.info.require_rollback()) {
-	  t->append(soid, op.extent.offset, op.extent.length, osd_op.indata, op.flags | flags);
+	  t->append(soid, op.extent.offset, op.extent.length, osd_op.indata, op.flags);
 	} else {
-	  t->write(soid, op.extent.offset, op.extent.length, osd_op.indata, op.flags | flags);
+	  t->write(soid, op.extent.offset, op.extent.length, osd_op.indata, op.flags);
 	}
 	write_update_size_and_usage(ctx->delta_stats, oi, ctx->modified_ranges,
 				    op.extent.offset, op.extent.length, true);

@@ -887,7 +887,7 @@ void OSDService::share_map_peer(int peer, Connection *con, OSDMapRef map)
       send_incremental_map(pe, con, map);
       note_peer_epoch(peer, map->get_epoch());
     } else
-      dout(20) << "share_map_peer " << con << " already has epoch " << pe << dendl;
+      dout(30) << "share_map_peer " << con << " already has epoch " << pe << dendl;
   } else {
     dout(20) << "share_map_peer " << con << " don't know epoch, doing nothing" << dendl;
     // no idea about peer's epoch.
@@ -5993,7 +5993,7 @@ void OSD::sched_scrub()
 	    (load_is_low ||
 	     (double)diff >= cct->_conf->osd_scrub_max_interval ||
 	     pg->scrubber.must_scrub)) {
-	  dout(10) << "sched_scrub scrubbing " << pgid << " at " << t
+	  dout(30) << "sched_scrub scrubbing " << pgid << " at " << t
 		   << (pg->scrubber.must_scrub ? ", explicitly requested" :
 		   ( (double)diff >= cct->_conf->osd_scrub_max_interval ? ", diff >= max" : ""))
 		   << dendl;
