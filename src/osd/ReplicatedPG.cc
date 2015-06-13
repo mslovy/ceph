@@ -2106,6 +2106,17 @@ void ReplicatedPG::finish_proxy_read(hobject_t oid, ceph_tid_t tid, int r)
   complete_read_ctx(r, ctx);
 }
 
+void ReplicatedPG::requeue_proxy_read(hobject_t& soid)
+{
+  map<hobject_t, list<OpRequestRef> >::iterator p = in_progress_proxy_reads.find(soid);
+  if (p == in_progress_proxy_reads.end())
+    return;
+
+  list<OpRequestRef>& ls = p->second;
+  dout(10) << __func__ << " " << soid << " requeuing " << ls.size() << " requests" << dendl;
+  requeue_ops(ls);
+}
+
 void ReplicatedPG::kick_proxy_read_blocked(hobject_t& soid)
 {
   map<hobject_t, list<OpRequestRef> >::iterator p = in_progress_proxy_reads.find(soid);
@@ -5934,6 +5945,11 @@ void ReplicatedPG::finish_ctx(OpContext *ctx, int log_op_type, bool maintain_ssc
 
 void ReplicatedPG::complete_read_ctx(int result, OpContext *ctx)
 {
+  if (ctx->op->been_reply()) {
+    close_op_ctx(ctx, 0);
+    return;
+  }
+  ctx->op->set_reply();
   MOSDOp *m = static_cast<MOSDOp*>(ctx->op->get_req());
   assert(ctx->async_reads_complete());
 
@@ -6401,14 +6417,18 @@ void ReplicatedPG::process_copy_chunk(hobject_t oid, ceph_tid_t tid, int r)
 
   copy_ops.erase(cobc->obs.oi.soid);
   cobc->stop_block();
-
-  // cancel and requeue proxy reads on this object
-  kick_proxy_read_blocked(cobc->obs.oi.soid);
-  for (map<ceph_tid_t, ProxyReadOpRef>::iterator it = proxyread_ops.begin();
-      it != proxyread_ops.end(); ++it) {
-    if (it->second->soid == cobc->obs.oi.soid) {
-      cancel_proxy_read(it->second);
+  
+  if (g_conf->osd_tier_kick_read_after_promote) {
+    // cancel and requeue proxy reads on this object
+    kick_proxy_read_blocked(cobc->obs.oi.soid);
+    for (map<ceph_tid_t, ProxyReadOpRef>::iterator it = proxyread_ops.begin();
+        it != proxyread_ops.end(); ++it) {
+      if (it->second->soid == cobc->obs.oi.soid) {
+        cancel_proxy_read(it->second);
+      }
     }
+  } else {
+    requeue_proxy_read(cobc->obs.oi.soid);
   }
 
   kick_object_context_blocked(cobc);
