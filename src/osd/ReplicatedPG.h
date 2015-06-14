@@ -1371,7 +1371,7 @@ protected:
   map<hobject_t, list<OpRequestRef> > in_progress_proxy_reads;
 
   void do_proxy_read(OpRequestRef op);
-  void finish_proxy_read(hobject_t oid, ceph_tid_t tid, int r);
+  void finish_proxy_read(hobject_t oid, ceph_tid_t tid, int r, utime_t lat);
   void kick_proxy_read_blocked(hobject_t& soid);
   void requeue_proxy_read(hobject_t& soid);
   void cancel_proxy_read(ProxyReadOpRef prdop);

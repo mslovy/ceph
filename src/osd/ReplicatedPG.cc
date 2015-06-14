@@ -2014,8 +2014,9 @@ struct C_ProxyRead : public Context {
       return;
     }
     if (last_peering_reset == pg->get_last_peering_reset()) {
-      pg->finish_proxy_read(oid, tid, r);
-      pg->osd->logger->tinc(l_osd_tier_r_lat, ceph_clock_now(NULL) - start);
+      utime_t lat = ceph_clock_now(NULL) - start;
+      pg->finish_proxy_read(oid, tid, r, lat);
+      pg->osd->logger->tinc(l_osd_tier_r_lat, lat);
     }
     pg->unlock();
   }
@@ -2056,10 +2057,10 @@ void ReplicatedPG::do_proxy_read(OpRequestRef op)
   in_progress_proxy_reads[soid].push_back(op);
 }
 
-void ReplicatedPG::finish_proxy_read(hobject_t oid, ceph_tid_t tid, int r)
+void ReplicatedPG::finish_proxy_read(hobject_t oid, ceph_tid_t tid, int r, utime_t lat)
 {
   dout(10) << __func__ << " " << oid << " tid " << tid
-	   << " " << cpp_strerror(r) << dendl;
+	   << " " << cpp_strerror(r) << " lat" << lat << dendl;
 
   map<ceph_tid_t, ProxyReadOpRef>::iterator p = proxyread_ops.find(tid);
   if (p == proxyread_ops.end()) {
@@ -2090,6 +2091,10 @@ void ReplicatedPG::finish_proxy_read(hobject_t oid, ceph_tid_t tid, int r)
 					      prdop->op);
   assert(it != q->second.end());
   OpRequestRef op = *it;
+  if (!op->been_reply()) {
+    osd->logger->tinc(l_osd_client_tier_r_lat, lat);
+    dout(10) << __func__ << " " << oid << " tid " << tid << " lat" << lat << dendl;
+  }
   q->second.erase(it);
   if (q->second.size() == 0) {
     in_progress_proxy_reads.erase(oid);
@@ -2112,7 +2117,7 @@ void ReplicatedPG::requeue_proxy_read(hobject_t& soid)
   if (p == in_progress_proxy_reads.end())
     return;
 
-  list<OpRequestRef>& ls = p->second;
+  list<OpRequestRef> ls = p->second;
   dout(10) << __func__ << " " << soid << " requeuing " << ls.size() << " requests" << dendl;
   requeue_ops(ls);
 }
@@ -5947,6 +5952,7 @@ void ReplicatedPG::complete_read_ctx(int result, OpContext *ctx)
 {
   if (ctx->op->been_reply()) {
     close_op_ctx(ctx, 0);
+    osd->logger->inc(l_osd_op_r_cancel);
     return;
   }
   ctx->op->set_reply();

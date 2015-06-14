@@ -2071,6 +2071,7 @@ void OSD::create_logger()
   osd_plb.add_time_avg(l_osd_op_process_lat, "op_process_latency");   // client op process latency
 
   osd_plb.add_u64_counter(l_osd_op_r,      "op_r");        // client reads
+  osd_plb.add_u64_counter(l_osd_op_r_cancel,      "op_r_cancel");        // client reads cancel
   osd_plb.add_u64_counter(l_osd_op_r_outb, "op_r_out_bytes");   // client read out bytes
   osd_plb.add_time_avg(l_osd_op_r_lat,  "op_r_latency");    // client read latency
   osd_plb.add_time_avg(l_osd_op_r_q_lat, "op_r_queue_latency");   // client read queue latency
@@ -2174,6 +2175,7 @@ void OSD::create_logger()
   osd_plb.add_time_avg(l_osd_tier_flush_lat, "osd_tier_flush_lat");
   osd_plb.add_time_avg(l_osd_tier_promote_lat, "osd_tier_promote_lat");
   osd_plb.add_time_avg(l_osd_tier_r_lat, "osd_tier_r_lat");
+  osd_plb.add_time_avg(l_osd_client_tier_r_lat, "osd_client_tier_r_lat");
 
   logger = osd_plb.create_perf_counters();
   cct->get_perfcounters_collection()->add(logger);

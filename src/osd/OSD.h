@@ -67,6 +67,7 @@ enum {
   l_osd_op_lat,
   l_osd_op_process_lat,
   l_osd_op_r,
+  l_osd_op_r_cancel,
   l_osd_op_r_outb,
   l_osd_op_r_lat,
   l_osd_op_r_q_lat,
@@ -170,6 +171,7 @@ enum {
   l_osd_tier_flush_lat,
   l_osd_tier_promote_lat,
   l_osd_tier_r_lat,
+  l_osd_client_tier_r_lat,
 
   l_osd_last,
 };
