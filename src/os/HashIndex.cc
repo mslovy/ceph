@@ -295,13 +295,10 @@ int HashIndex::_remove(const vector<string> &path,
   }
 }
 
-int HashIndex::_lookup(const ghobject_t &oid,
-		       vector<string> *path,
-		       string *mangled_name,
-		       int *exists_out) {
-  vector<string> path_comp;
-  get_path_components(oid, &path_comp);
-  vector<string>::iterator next = path_comp.begin();
+int HashIndex::_lookup(vector<string>* path,
+                       vector<string>& path_comp,
+                       vector<string>::iterator next)
+{
   int exists;
   while (1) {
     int r = path_exists(*path, &exists);
@@ -311,11 +308,65 @@ int HashIndex::_lookup(const ghobject_t &oid,
       if (path->empty())
 	return -ENOENT;
       path->pop_back();
-      break;
+      return 0;
     }
     if (next == path_comp.end())
-      break;
+      return 0;
     path->push_back(*(next++));
+  }
+}
+
+int HashIndex::_lookup_reverse(vector<string>* path)
+{
+  int exists;
+  while (1) {
+    int r = path_exists(*path, &exists);
+    if (r < 0)
+      return r;
+    if (exists)
+      return 0;
+    else {
+      if (path->empty()) {
+        return -ENOENT;
+      }
+      path->pop_back();
+    }
+  }
+}
+
+int HashIndex::_lookup(const ghobject_t &oid,
+		       vector<string> *path,
+		       string *mangled_name,
+		       int *exists_out) {
+  vector<string> path_comp;
+  get_path_components(oid, &path_comp);
+  vector<string>::iterator next = path_comp.begin();
+  uint32_t start = g_conf->filestore_hashindex_search_start;
+  if (start < path_comp.size()) {
+    for(uint32_t i = 0; i < start; i++) {
+      path->push_back(*(next++));
+    }
+  }
+  int exists;
+  int r = path_exists(*path, &exists);
+  if (r < 0)
+    return r;
+  if (!exists) {
+    if (path->size() < 1)
+      return -ENOENT;
+    path->pop_back();
+    int ret = _lookup_reverse(path);
+    if (ret < 0) {
+      return ret;
+    }
+  } else {
+    if (next != path_comp.end()) {
+      path->push_back(*(next++)); 
+      int ret = _lookup(path, path_comp, next);
+      if (ret < 0) {
+        return ret;
+      }
+    }
   }
   return get_mangled_name(*path, oid, mangled_name, exists_out);
 }

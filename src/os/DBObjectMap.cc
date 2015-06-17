@@ -828,11 +828,15 @@ int DBObjectMap::get_xattrs(const ghobject_t &oid,
 			    const set<string> &to_get,
 			    map<string, bufferlist> *out)
 {
+  dout(15) << __func__ << " oid " << oid << dendl;
+  utime_t start = ceph_clock_now(NULL);
   MapHeaderLock hl(this, oid);
   Header header = lookup_map_header(hl, oid);
   if (!header)
     return -ENOENT;
-  return db->get(xattr_prefix(header), to_get, out);
+  int ret = db->get(xattr_prefix(header), to_get, out);
+  dout(10) << __func__ << " oid " << oid << " lat " << (ceph_clock_now(NULL) - start) << dendl;
+  return ret;
 }
 
 int DBObjectMap::get_all_xattrs(const ghobject_t &oid,

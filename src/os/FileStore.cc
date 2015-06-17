@@ -230,6 +230,8 @@ int FileStore::lfn_open(coll_t cid,
   assert(get_allow_sharded_objects() ||
 	 ( oid.shard_id == shard_id_t::NO_SHARD &&
 	   oid.generation == ghobject_t::NO_GEN ));
+  utime_t start = ceph_clock_now(NULL);
+  dout(15) << __func__ << " " << cid << "/" << oid << " create " << create << dendl;
   assert(outfd);
   int r = 0;
   bool need_lock = true;
@@ -258,11 +260,14 @@ int FileStore::lfn_open(coll_t cid,
     ((*index).index)->access_lock.get_write();
   }
   if (!replaying) {
+    logger->inc(l_os_fdcache_total);
     *outfd = fdcache.lookup(oid);
     if (*outfd) {
+      logger->inc(l_os_fdcache_hit);
       if (need_lock) {
         ((*index).index)->access_lock.put_write();
       }
+      dout(10) << __func__ << " "  << cid << "/" << oid << " lat " << (ceph_clock_now(NULL) - start) << dendl;
       return 0;
     }
   }
@@ -322,6 +327,8 @@ int FileStore::lfn_open(coll_t cid,
     ((*index).index)->access_lock.put_write();
   }
 
+  logger->tinc(l_os_fd_lat, ceph_clock_now(NULL) - start);
+  dout(10) << __func__ << " "  << cid << "/" << oid << " lat " <<  (ceph_clock_now(NULL) - start) << dendl;
   return 0;
 
  fail:
@@ -603,6 +610,9 @@ FileStore::FileStore(const std::string &base, const std::string &jdev, osflagbit
   plb.add_u64_counter(l_os_j_full, "journal_full");
   plb.add_time_avg(l_os_queue_lat, "queue_transaction_latency_avg");
 
+  plb.add_u64_counter(l_os_fdcache_hit, "fdcache_hit");
+  plb.add_u64_counter(l_os_fdcache_total, "fdcache_total");
+  plb.add_time_avg(l_os_fd_lat, "fd_lat");
   plb.add_time_avg(l_os_r_lat, "read_latency");
   plb.add_time_avg(l_os_w_lat, "write_latency");
   plb.add_time_avg(l_os_setattr_lat, "setattr_latency");
@@ -2895,7 +2905,7 @@ int FileStore::read(
   dout(10) << "FileStore::read " << cid << "/" << oid << " " << offset << "~"
 	   << got << "/" << len << " lat " << lat <<dendl;
   if (got != len) {
-    dout(5) << "FileStore::read error " << cid << "/" << oid << " " << offset << "~"
+    dout(10) << "FileStore::read error " << cid << "/" << oid << " " << offset << "~"
 	     << got << "/" << len << " lat " << lat <<dendl;
   }
   if (g_conf->filestore_debug_inject_read_err &&
@@ -3772,6 +3782,8 @@ int FileStore::snapshot(const string& name)
 
 int FileStore::_fgetattr(int fd, const char *name, bufferptr& bp)
 {
+  utime_t start = ceph_clock_now(NULL);
+  dout(15) << __func__ << " fd " << fd << " name " << name << dendl;
   char val[100];
   int l = chain_fgetxattr(fd, name, val, sizeof(val));
   if (l >= 0) {
@@ -3785,11 +3797,14 @@ int FileStore::_fgetattr(int fd, const char *name, bufferptr& bp)
     }
   }
   assert(!m_filestore_fail_eio || l != -EIO);
+  dout(10) << __func__ << " fd " << fd << " name " << name << " lat " << (ceph_clock_now(NULL) - start) << dendl;
   return l;
 }
 
 int FileStore::_fgetattrs(int fd, map<string,bufferptr>& aset)
 {
+  utime_t start = ceph_clock_now(NULL);
+  dout(15) << __func__ << " fd " << fd << dendl;
   // get attr list
   char names1[100];
   int len = chain_flistxattr(fd, names1, sizeof(names1)-1);
@@ -3833,6 +3848,7 @@ int FileStore::_fgetattrs(int fd, map<string,bufferptr>& aset)
   }
 
   delete[] names2;
+  dout(10) << __func__ << " fd " << fd << " lat " << (ceph_clock_now(NULL) - start) << dendl;
   return 0;
 }
 

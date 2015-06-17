@@ -824,6 +824,7 @@ OPTION(filestore_op_thread_suicide_timeout, OPT_INT, 180)
 OPTION(filestore_commit_timeout, OPT_FLOAT, 600)
 OPTION(filestore_fiemap_threshold, OPT_INT, 4096)
 OPTION(filestore_merge_threshold, OPT_INT, 10)
+OPTION(filestore_hashindex_search_start, OPT_U32, 4)
 OPTION(filestore_split_multiple, OPT_INT, 2)
 OPTION(filestore_update_to, OPT_INT, 1000)
 OPTION(filestore_blackhole, OPT_BOOL, false)     // drop any new transactions on the floor

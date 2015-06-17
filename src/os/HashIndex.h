@@ -172,6 +172,11 @@ protected:
     const ghobject_t &oid,
     const string &mangled_name
     );
+  int _lookup(vector<string>* path,
+    vector<string>& path_comp,
+    vector<string>::iterator next);
+  int _lookup_reverse(
+    vector<string>* path);
   int _lookup(
     const ghobject_t &oid,
     vector<string> *path,
