@@ -21,6 +21,7 @@
 #include "common/TrackedOp.h"
 #include "common/WorkQueue.h"
 #include "ObjectMap.h"
+#include "FDCache.h"
 
 #include <errno.h>
 #include <sys/stat.h>
@@ -1888,6 +1889,12 @@ public:
     uint32_t op_flags = 0,
     bool allow_eio = false) = 0;
 
+   virtual int lfn_open(
+    coll_t cid,
+    const ghobject_t& oid,
+    bool create,
+    FDRef *outfd,
+    Index *index = 0) { return 0; }
   /**
    * fiemap -- get extent map of data of an object
    *

@@ -1509,6 +1509,12 @@ void ReplicatedPG::do_op(OpRequestRef& op)
     return;
   }
 
+  if(pool.info.require_rollback() && oid.is_head()) {
+    ObjectContextRef obc = object_contexts.lookup(oid);
+    if (!obc)
+      pgbackend->object_preheat(oid, op);
+  }
+
   int r = find_object_context(
     oid, &obc, can_create,
     m->get_flags() & CEPH_OSD_FLAG_MAP_SNAP_CLONE,
@@ -2073,7 +2079,7 @@ void ReplicatedPG::do_proxy_read(OpRequestRef op)
 void ReplicatedPG::finish_proxy_read(hobject_t oid, ceph_tid_t tid, int r, utime_t lat)
 {
   dout(10) << __func__ << " " << oid << " tid " << tid
-	   << " " << cpp_strerror(r) << " lat" << lat << dendl;
+	   << " " << cpp_strerror(r) << " lat " << lat << dendl;
 
   map<ceph_tid_t, ProxyReadOpRef>::iterator p = proxyread_ops.find(tid);
   if (p == proxyread_ops.end()) {
@@ -2106,7 +2112,7 @@ void ReplicatedPG::finish_proxy_read(hobject_t oid, ceph_tid_t tid, int r, utime
   OpRequestRef op = *it;
   if (!op->been_reply()) {
     osd->logger->tinc(l_osd_client_tier_r_lat, lat);
-    dout(10) << __func__ << " " << oid << " tid " << tid << " lat" << lat << dendl;
+    dout(10) << __func__ << " " << oid << " tid " << tid << " lat " << lat << dendl;
   }
   q->second.erase(it);
   if (q->second.size() == 0) {

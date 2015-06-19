@@ -146,6 +146,7 @@ public:
     const list<pair<boost::tuple<uint64_t, uint64_t, uint32_t>,
 		    pair<bufferlist*, Context*> > > &to_read,
     Context *on_complete);
+  void object_preheat(const hobject_t &hoid, OpRequestRef op);
 
 private:
   friend struct ECRecoveryHandle;

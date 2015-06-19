@@ -786,13 +786,32 @@ bool ECBackend::handle_message(
   }
   case MSG_OSD_EC_READ: {
     MOSDECSubOpRead *op = static_cast<MOSDECSubOpRead*>(_op->get_req());
-    MOSDECSubOpReadReply *reply = new MOSDECSubOpReadReply;
-    reply->pgid = get_parent()->primary_spg_t();
-    reply->map_epoch = get_parent()->get_epoch();
-    handle_sub_read(op->op.from, op->op, &(reply->op));
-    op->set_priority(priority);
-    get_parent()->send_message_osd_cluster(
-      op->op.from.osd, reply, get_parent()->get_epoch());
+    if (op->op.preheat) {
+      for (map<hobject_t, list<boost::tuple<uint64_t, uint64_t, uint32_t> > >::iterator i =
+           op->op.to_read.begin();
+           i != op->op.to_read.end();
+           ++i) {
+        for (list<boost::tuple<uint64_t, uint64_t, uint32_t> >::iterator j = i->second.begin();
+	     j != i->second.end();
+	     ++j) {
+          ghobject_t g(i->first, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard);
+          utime_t start = ceph_clock_now(NULL);
+//        FDRef fd;
+//        store->lfn_open(i->first.is_temp() ? temp_coll : coll, g, false, &fd);
+          bufferlist bl;
+          store->read(i->first.is_temp() ? temp_coll : coll, g, j->get<0>(), j->get<1>(), bl, 0, true);
+          dout(10) << __func__ << " preheat oid " << g << " lat " << (ceph_clock_now(NULL) - start)<< dendl;
+        }
+      }
+    } else {
+      MOSDECSubOpReadReply *reply = new MOSDECSubOpReadReply;
+      reply->pgid = get_parent()->primary_spg_t();
+      reply->map_epoch = get_parent()->get_epoch();
+      handle_sub_read(op->op.from, op->op, &(reply->op));
+      op->set_priority(priority);
+      get_parent()->send_message_osd_cluster(
+        op->op.from.osd, reply, get_parent()->get_epoch());
+    }
     return true;
   }
   case MSG_OSD_EC_READ_REPLY: {
@@ -1624,6 +1643,7 @@ void ECBackend::start_read_op(
 	messages[k->get<0>()].to_read[i->first].push_back(boost::make_tuple(k->get<1>(),
 								    k->get<2>(),
 								    j->get<2>()));
+        messages[k->get<0>()].preheat = false;
       }
       assert(!need_attrs);
     }
@@ -1650,6 +1670,63 @@ void ECBackend::start_read_op(
       get_parent()->get_epoch());
   }
   dout(10) << __func__ << ": started " << op << dendl;
+}
+
+void ECBackend::object_preheat(const hobject_t &hoid, OpRequestRef op)
+{
+  map<pg_shard_t, ECSubRead> messages;
+  const vector<int> &chunk_mapping = ec_impl->get_chunk_mapping();
+  set<int> want_to_read;
+  for (int i = 0; i < (int)ec_impl->get_data_chunk_count(); ++i) {
+    int chunk = (int)chunk_mapping.size() > i ? chunk_mapping[i] : i;
+    want_to_read.insert(chunk);
+  }
+  set<pg_shard_t> shards;
+  int r = get_min_avail_to_read_shards(
+    hoid,
+    want_to_read,
+    false,
+    &shards);
+  assert(r == 0);
+  MOSDOp *m = static_cast<MOSDOp*>(op->get_req());
+  uint64_t offset = 0, length = 0;
+  uint32_t flags = 0;
+  if(!m->ops.empty()) {
+    offset = m->ops.front().op.extent.offset;
+    length = m->ops.front().op.extent.length;
+    flags = m->ops.front().op.flags;
+  }
+  pair<uint64_t, uint64_t> tmp;
+  tmp = sinfo.offset_len_to_stripe_bounds(make_pair(offset, length));
+  for (set<pg_shard_t>::const_iterator k = shards.begin();
+       k != shards.end();
+       ++k) {
+    messages[*k].to_read[hoid].push_back(boost::make_tuple(tmp.first, tmp.second, flags));
+    messages[*k].preheat = true;
+  }
+  int priority = cct->_conf->osd_client_op_priority;
+  ceph_tid_t tid = get_parent()->get_tid();
+  for (map<pg_shard_t, ECSubRead>::iterator i = messages.begin();
+       i != messages.end();
+       ++i) {
+    if (i->first == get_parent()->whoami_shard()) {
+      continue;
+    }
+    i->second.tid = tid;
+    MOSDECSubOpRead *msg = new MOSDECSubOpRead;
+    msg->set_priority(priority);
+    msg->pgid = spg_t(
+      get_parent()->whoami_spg_t().pgid,
+      i->first.shard);
+    msg->map_epoch = get_parent()->get_epoch();
+    msg->op = i->second;
+    msg->op.from = get_parent()->whoami_shard();
+    msg->op.tid = tid;
+    get_parent()->send_message_osd_cluster(
+      i->first.osd,
+      msg,
+      get_parent()->get_epoch());
+  }
 }
 
 ECUtil::HashInfoRef ECBackend::get_hash_info(
