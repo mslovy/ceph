@@ -141,7 +141,6 @@ static inline unsigned long long ceph_sanitize_features(unsigned long long f) {
 	 CEPH_FEATURE_MSGR_KEEPALIVE2 |	\
 	 CEPH_FEATURE_OSD_POOLRESEND |	\
          CEPH_FEATURE_ERASURE_CODE_PLUGINS_V2 |   \
-         CEPH_FEATURE_OSD_SET_ALLOC_HINT |   \
 	 CEPH_FEATURE_OSD_FADVISE_FLAGS |     \
          CEPH_FEATURE_OSD_REPOP |   \
 	 CEPH_FEATURE_OSD_OBJECT_DIGEST	|    \

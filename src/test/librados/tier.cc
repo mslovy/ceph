@@ -4448,7 +4448,6 @@ public:
   virtual ~LibRadosTwoPoolsECPPPartialRead() {};
 protected:
   static void SetUpTestCase() {
-    EXPECT_EQ(0, ::system("ceph tell osd.* injectargs \"--osd_pool_erasure_code_partial_chunk_read_ratio 1\""));
     pool_name = get_temp_pool_name();
     ASSERT_EQ("", create_one_ec_pool_pp(pool_name, s_cluster));
     cache_pool_name = get_temp_pool_name();
@@ -4457,7 +4456,6 @@ protected:
   static void TearDownTestCase() {
     ASSERT_EQ(0, s_cluster.pool_delete(cache_pool_name.c_str()));
     ASSERT_EQ(0, destroy_one_ec_pool_pp(pool_name, s_cluster));
-    EXPECT_EQ(0, ::system("ceph tell osd.* injectargs \"--osd_pool_erasure_code_partial_chunk_read_ratio 0\""));
   }
   static std::string cache_pool_name;
 

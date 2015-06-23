@@ -349,6 +349,20 @@ void PGBackend::be_scan_list(
 	  poid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
 	o.attrs);
 
+      if (parent->get_pool().is_erasure()) {
+        if (o.attrs.count(ECUtil::get_cinfo_key())) {
+          ECUtil::CompactInfo cinfo;
+          bufferlist bl;
+          bl.append(o.attrs[ECUtil::get_cinfo_key()]);
+          bufferlist::iterator bp = bl.begin();
+          ::decode(cinfo, bp);
+          o.size = cinfo.get_total_origin_chunk_size();
+        } else {
+          derr << __func__ << "  " << poid << " do not have " << ECUtil::get_hinfo_key() << dendl;
+          o.read_error = true;
+        }
+      }
+
       // calculate the CRC32 on deep scrubs
       if (deep) {
 	be_deep_scrub(*p, seed, o, handle);
@@ -494,16 +508,18 @@ map<pg_shard_t, ScrubMap *>::const_iterator
       // invalid object info, probably corrupt
       continue;
     }
+
     uint64_t correct_size = be_get_ondisk_size(oi.size);
     if (correct_size != i->second.size) {
       // invalid size, probably corrupt
       dout(10) << __func__ << ": rejecting osd " << j->first
-	       << " for obj " << obj
-	       << ", size mismatch"
-	       << dendl;
+               << " for obj " << obj
+               << ", size mismatch"
+               << dendl;
       // invalid object info, probably corrupt
       continue;
     }
+
     if (parent->get_pool().is_replicated()) {
       if (okseed && oi.is_data_digest() && i->second.digest_present &&
 	  oi.data_digest != i->second.digest) {

@@ -91,6 +91,7 @@ TYPE(PushReplyOp)
 
 #include "osd/ECUtil.h"
 TYPE(ECUtil::HashInfo)
+TYPE(ECUtil::CompactInfo)
 
 #include "osd/ECMsgTypes.h"
 TYPE(ECSubWrite)

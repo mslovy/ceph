@@ -4174,6 +4174,10 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
           result = -EOPNOTSUPP;
           break;
         }
+        if (pool.info.require_rollback()) {
+          result = -EOPNOTSUPP;
+          break;
+        }
 	if (maybe_create_new_object(ctx)) {
           ctx->mod_desc.create();
           t->touch(soid);
@@ -5146,8 +5150,10 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
   fail:
     osd_op.rval = result;
     tracepoint(osd, do_osd_op_post, soid.oid.name.c_str(), soid.snap.val, op.op, ceph_osd_op_name(op.op), op.flags, result);
-    if (result < 0 && (op.flags & CEPH_OSD_OP_FLAG_FAILOK))
+    if (result < 0 && (op.flags & CEPH_OSD_OP_FLAG_FAILOK)) {
+      dout(20) <<  __func__ << " ret " << cpp_strerror(result) << " but FAILOK." << dendl;
       result = 0;
+    }
 
     if (result < 0)
       break;

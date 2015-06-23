@@ -154,7 +154,8 @@ ostream &operator<<(ostream &lhs, const ECBackend::RecoveryOp &rhs)
 	     << " obc refcount=" << rhs.obc.use_count()
 	     << " state=" << ECBackend::RecoveryOp::tostr(rhs.state)
 	     << " waiting_on_pushes=" << rhs.waiting_on_pushes
-	     << " extent_requested=" << rhs.extent_requested;
+	     << " extent_requested=" << rhs.extent_requested
+	     << " compact_info=" << rhs.cinfo;
 }
 
 void ECBackend::RecoveryOp::dump(Formatter *f) const
@@ -211,6 +212,7 @@ struct OnRecoveryReadComplete :
       hoid,
       res.returned.back(),
       res.attrs,
+      res.need.back(),
       in.first);
   }
 };
@@ -222,7 +224,8 @@ struct RecoveryMessages {
     ECBackend *ec,
     const hobject_t &hoid, uint64_t off, uint64_t len,
     const set<pg_shard_t> &need,
-    bool attrs) {
+    bool attrs,
+    ECUtil::CompactInfoRef cinfo) {
     list<boost::tuple<uint64_t, uint64_t, uint32_t> > to_read;
     list<bool> partial_read;
     to_read.push_back(boost::make_tuple(off, len, 0));
@@ -234,7 +237,12 @@ struct RecoveryMessages {
       pair<uint64_t, uint64_t> chunk_off_len =
         ec->sinfo.aligned_offset_len_to_chunk(make_pair(i->get<0>(), i->get<1>()));
       for(set<pg_shard_t>::const_iterator j = need.begin(); j != need.end(); ++j) {
-        pg_need.push_back(boost::make_tuple(*j, chunk_off_len.first, chunk_off_len.second));
+        if (cinfo) {
+          pair<uint32_t, uint32_t> loc = cinfo->convert_compact_ranges(j->shard, chunk_off_len.first, chunk_off_len.second);
+          pg_need.push_back(boost::make_tuple(*j, loc.first, loc.second));
+        } else {
+          pg_need.push_back(boost::make_tuple(*j, chunk_off_len.first, chunk_off_len.second));
+        }
       }
       to_need.push_back(pg_need);
       partial_read.push_back(false);
@@ -251,7 +259,8 @@ struct RecoveryMessages {
 	  new OnRecoveryReadComplete(
 	    ec,
 	    hoid),
-          partial_read)));
+          partial_read,
+          cinfo)));
   }
 
   map<pg_shard_t, vector<PushOp> > pushes;
@@ -355,10 +364,30 @@ void ECBackend::handle_recovery_push_reply(
   continue_recovery_op(rop, m);
 }
 
+int ECBackend::read_reply_min_chunk(ECUtil::CompactInfoRef cinfo,
+  map<int, bufferlist>& from, list<boost::tuple<pg_shard_t, uint64_t, uint64_t> > &need)
+{
+  uint32_t min_chunk = (uint32_t) - 1;
+  for (list<boost::tuple<pg_shard_t, uint64_t, uint64_t> >::iterator it = need.begin();
+       it != need.end();
+       ++it) {
+    uint32_t begin_chunk = cinfo->conver_compact_range(it->get<0>().shard, it->get<1>());
+    uint64_t end = it->get<1>() + it->get<2>();
+    uint32_t end_chunk = cinfo->conver_compact_min_range(it->get<0>().shard, end);
+    assert(end_chunk >= begin_chunk);
+    if (end_chunk < min_chunk) {
+      min_chunk = end_chunk;
+    }
+  } 
+  assert(min_chunk != (uint32_t) - 1);
+  return min_chunk;
+}
+
 void ECBackend::handle_recovery_read_complete(
   const hobject_t &hoid,
   boost::tuple<uint64_t, uint64_t, map<pg_shard_t, bufferlist> > &to_read,
   boost::optional<map<string, bufferlist> > attrs,
+  list<boost::tuple<pg_shard_t, uint64_t, uint64_t> > &need,
   RecoveryMessages *m)
 {
   dout(10) << __func__ << ": returned " << hoid << " "
@@ -382,9 +411,8 @@ void ECBackend::handle_recovery_read_complete(
       ++i) {
     from[i->first.shard].claim(i->second);
   }
-  dout(10) << __func__ << ": " << from << dendl;
-  ECUtil::decode(sinfo, ec_impl, from, target);
-  if (attrs) {
+
+ if (attrs) {
     op.xattrs.swap(*attrs);
 
     if (!op.obc) {
@@ -400,7 +428,51 @@ void ECBackend::handle_recovery_read_complete(
       ::decode(hinfo, bp);
     }
     op.hinfo = unstable_hashinfo_registry.lookup_or_create(hoid, hinfo);
+
+    ECUtil::CompactInfo cinfo(ec_impl->get_chunk_count(), sinfo.get_stripe_width(), sinfo.get_chunk_size());
+    if (op.obc->obs.oi.size > 0) {
+      assert(op.xattrs.count(ECUtil::get_cinfo_key()));
+      bufferlist::iterator bp = op.xattrs[ECUtil::get_cinfo_key()].begin();
+      ::decode(cinfo, bp);
+    }
+    op.cinfo = unstable_compactinfo_registry.lookup_or_create(hoid, cinfo);
+
   }
+
+  assert(op.cinfo);
+  read_reply_min_chunk(op.cinfo, from, need); // check
+
+  uint64_t min_chunk_size = (uint64_t) - 1;
+  for (list<boost::tuple<pg_shard_t, uint64_t, uint64_t> >::const_iterator j = need.begin();
+       j != need.end();
+       ++j) {
+    shard_id_t shard = j->get<0>().shard;
+    uint64_t offset = j->get<1>();
+    uint64_t len = j->get<2>();
+    bufferlist bl;
+    op.cinfo->decompact(shard, offset, len, from[shard], bl, false);
+    if (min_chunk_size > bl.length())
+      min_chunk_size = bl.length();
+    from[shard].swap(bl);
+  }
+
+  assert((min_chunk_size != ((uint64_t) - 1)) && min_chunk_size);
+
+  for (map<int, bufferlist>::iterator it = from.begin(); it != from.end(); ++it) {
+    bufferlist bl;
+    bl.substr_of(it->second, 0, min_chunk_size);
+    it->second.claim(bl);
+  }
+
+  ECUtil::decode(sinfo, ec_impl, from, target);
+ 
+  dout(10) << __func__ << ": " << from << " stripe width  " << op.cinfo->get_stripe_width()
+           << " min chunk size " << min_chunk_size << " chunk size " << op.cinfo->get_chunk_size() << dendl;
+
+  op.extent_requested = make_pair(op.recovery_progress.data_recovered_to,
+    op.cinfo->get_stripe_width() / op.cinfo->get_chunk_size() * min_chunk_size);
+ 
+  dout(10) << __func__ << ": " << from << " op " << op << dendl;
   assert(op.xattrs.size());
   assert(op.obc);
   continue_recovery_op(op, m);
@@ -517,9 +589,8 @@ void ECBackend::continue_recovery_op(
 	op.recovery_progress.data_recovered_to,
 	recovery_max_chunk,
 	to_read,
-	op.recovery_progress.first);
-      op.extent_requested = make_pair(op.recovery_progress.data_recovered_to,
-				      recovery_max_chunk);
+	op.recovery_progress.first,
+        op.cinfo);
       dout(10) << __func__ << ": IDLE return " << op << dendl;
       return;
     }
@@ -556,12 +627,32 @@ void ECBackend::continue_recovery_op(
 	    after_progress.data_recovered_to -
 	    op.recovery_progress.data_recovered_to)
 	  );
-	if (pop.data.length())
-	  pop.data_included.insert(
-	    sinfo.aligned_logical_offset_to_chunk_offset(
-	      op.recovery_progress.data_recovered_to),
-	    pop.data.length()
-	    );
+
+        bufferlist bl; 
+        assert(pop.data.length() % op.cinfo->get_chunk_size() == 0);
+        for (uint32_t i = 0; i < pop.data.length(); i += op.cinfo->get_chunk_size()) {
+          bufferlist src;
+          src.substr_of(pop.data, i, op.cinfo->get_chunk_size());
+          bufferlist dbl;
+          src.compress(buffer::ALG_LZ4, dbl);
+          bl.claim_append(dbl);
+        }   
+        pop.data.claim(bl);
+
+        assert(pop.data.length());
+
+	if (pop.data.length()) {
+          uint64_t recovered_to = op.recovery_progress.data_recovered_to;
+          assert(recovered_to % op.cinfo->get_stripe_width() == 0);
+          uint64_t offset = 0;
+          if (recovered_to)
+            offset = op.cinfo->get_chunk_compact_range(mi->shard)[recovered_to / op.cinfo->get_stripe_width() - 1];
+          dout(20) << __func__ << " shard " << mi->shard << " data_recovered_to " << recovered_to
+                   << " offset " << offset << " len " << pop.data.length() 
+                   << " cinfo " << op.cinfo->get_chunk_compact_range(mi->shard) << dendl;
+          op.cinfo->conver_compact_range(mi->shard, offset + pop.data.length()); // to check
+	  pop.data_included.insert(offset, pop.data.length());
+        }
 	if (op.recovery_progress.first) {
 	  pop.attrset = op.xattrs;
 	}
@@ -998,6 +1089,7 @@ void ECBackend::handle_sub_read_reply(
       pair<uint64_t, uint64_t> adjusted =
 	sinfo.aligned_offset_len_to_chunk(
 	  make_pair(req_iter->get<0>(), req_iter->get<1>()));
+      dout(20) << __func__ << " oid " << i->first << " from " << from << " length " << j->second.length() << dendl;
       riter->get<2>()[from].claim(j->second);
     }
   }
@@ -1075,6 +1167,8 @@ void ECBackend::complete_read_op(ReadOp &rop, RecoveryMessages *m)
     rop.complete.begin();
   assert(rop.to_read.size() == rop.complete.size());
   for (; reqiter != rop.to_read.end(); ++reqiter, ++resiter) {
+    if (!resiter->second.cinfo)
+      resiter->second.cinfo = reqiter->second.cinfo;
     if (reqiter->second.cb) {
       pair<RecoveryMessages *, read_result_t &> arg(
 	m, resiter->second);
@@ -1309,8 +1403,8 @@ void ECBackend::submit_transaction(
   for (set<hobject_t>::iterator i = need_hinfos.begin();
        i != need_hinfos.end();
        ++i) {
-    ECUtil::HashInfoRef ref = get_hash_info(*i);
-    if (!ref) {
+    ECUtil::HashInfoRef hinfo = get_hash_info(*i);
+    if (!hinfo) {
       derr << __func__ << ": get_hash_info(" << *i << ")"
 	   << " returned a null pointer and there is no "
 	   << " way to recover from such an error in this "
@@ -1320,7 +1414,22 @@ void ECBackend::submit_transaction(
     op->unstable_hash_infos.insert(
       make_pair(
 	*i,
-	ref));
+	hinfo));
+
+    ECUtil::CompactInfoRef cinfo = get_compact_info(*i);
+    if (!cinfo) {
+      derr << __func__ << ": get_compact_info(" << *i << ")"
+	   << " returned a null pointer and there is no "
+	   << " way to recover from such an error in this "
+	   << " context" << dendl;
+      assert(0);
+    }
+    op->unstable_compact_infos.insert(
+      make_pair(
+	*i,
+	cinfo));
+
+    assert(hinfo->get_total_chunk_size() == cinfo->get_total_origin_chunk_size());
   }
 
   for (vector<pg_log_entry_t>::iterator i = op->log_entries.begin();
@@ -1332,12 +1441,20 @@ void ECBackend::submit_transaction(
       dout(10) << __func__ << ": stashing HashInfo for "
 	       << i->soid << " for entry " << *i << dendl;
       assert(op->unstable_hash_infos.count(i->soid));
+      assert(op->unstable_compact_infos.count(i->soid));
       ObjectModDesc desc;
       map<string, boost::optional<bufferlist> > old_attrs;
+
       bufferlist old_hinfo;
       ::encode(*(op->unstable_hash_infos[i->soid]), old_hinfo);
       old_attrs[ECUtil::get_hinfo_key()] = old_hinfo;
+
+      bufferlist old_cinfo;
+      ::encode(*(op->unstable_compact_infos[i->soid]), old_cinfo);
+      old_attrs[ECUtil::get_cinfo_key()] = old_cinfo;
+
       desc.setattrs(old_attrs);
+
       i->mod_desc.swap(desc);
       i->mod_desc.claim_append(desc);
       assert(i->mod_desc.can_rollback());
@@ -1475,7 +1592,7 @@ void ECBackend::start_read_op(
       for (list<boost::tuple<pg_shard_t, uint64_t, uint64_t> >::const_iterator k = j->begin();
 	   k != j->end();
 	   ++k) {
-       pg_need.insert(k->get<0>());
+        pg_need.insert(k->get<0>());
       }
     }
     for (set<pg_shard_t>::const_iterator j = pg_need.begin();
@@ -1483,7 +1600,7 @@ void ECBackend::start_read_op(
 	 ++j) {
       if (need_attrs) {
 	messages[*j].attrs_to_read.insert(i->first);
-	need_attrs = false;
+        need_attrs = false;
       }
       op.obj_to_source[i->first].insert(*j);
       op.source_to_obj[*j].insert(i->first);
@@ -1547,7 +1664,6 @@ ECUtil::HashInfoRef ECBackend::get_hash_info(
       &st);
     ECUtil::HashInfo hinfo(ec_impl->get_chunk_count());
     if (r >= 0 && st.st_size > 0) {
-      dout(10) << __func__ << ": found on disk, size " << st.st_size << dendl;
       bufferlist bl;
       r = store->getattr(
 	hoid.is_temp() ? temp_coll : coll,
@@ -1557,12 +1673,55 @@ ECUtil::HashInfoRef ECBackend::get_hash_info(
       if (r >= 0) {
 	bufferlist::iterator bp = bl.begin();
 	::decode(hinfo, bp);
-	assert(hinfo.get_total_chunk_size() == (uint64_t)st.st_size);
+        dout(10) << __func__ << ": found on disk, size " << st.st_size << " origin size "
+                 << hinfo.get_total_chunk_size() << dendl;
       } else {
+        dout(10) << __func__ << ": not found this attr " << ECUtil::get_hinfo_key() << dendl;
 	return ECUtil::HashInfoRef();
       }
     }
     ref = unstable_hashinfo_registry.lookup_or_create(hoid, hinfo);
+  }
+  return ref;
+}
+
+ECUtil::CompactInfoRef ECBackend::get_compact_info(
+  const hobject_t &hoid, bool *error)
+{
+  dout(10) << __func__ << ": Getting attr on " << hoid << dendl;
+  ECUtil::CompactInfoRef ref = unstable_compactinfo_registry.lookup(hoid);
+  if (!ref) {
+    dout(10) << __func__ << ": not in cache " << hoid << dendl;
+    struct stat st;
+    int r = store->stat(
+      hoid.is_temp() ? temp_coll : coll,
+      ghobject_t(hoid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
+      &st);
+    ECUtil::CompactInfo cinfo(ec_impl->get_chunk_count(), sinfo.get_stripe_width(), sinfo.get_chunk_size());
+    if (r >= 0 && st.st_size > 0) {
+      bufferlist bl;
+      r = store->getattr(
+	hoid.is_temp() ? temp_coll : coll,
+	ghobject_t(hoid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
+	ECUtil::get_cinfo_key(),
+	bl);
+      if (r >= 0) {
+	bufferlist::iterator bp = bl.begin();
+	::decode(cinfo, bp);
+        dout(10) << __func__ << ": found on disk, size " << st.st_size << " origin size "
+                 << cinfo.get_total_origin_chunk_size() << dendl;
+        bool err = (cinfo.get_total_chunk_size(get_parent()->whoami_shard().shard) != (uint64_t)st.st_size);
+        if (error) {
+          *error = err;
+        } else
+          assert(!err);
+      } else {
+        dout(10) << __func__ << ": not found this attr " << ECUtil::get_cinfo_key() << dendl;
+	return ECUtil::CompactInfoRef();
+      }
+    }
+    if (!error || !(*error))
+      ref = unstable_compactinfo_registry.lookup_or_create(hoid, cinfo);
   }
   return ref;
 }
@@ -1610,6 +1769,7 @@ void ECBackend::start_write(Op *op) {
 
   op->t->generate_transactions(
     op->unstable_hash_infos,
+    op->unstable_compact_infos,
     ec_impl,
     get_parent()->get_info().pgid.pgid,
     sinfo,
@@ -1692,11 +1852,28 @@ struct CallClientContexts :
   }
   void finish(pair<RecoveryMessages *, ECBackend::read_result_t &> &in) {
     ECBackend::read_result_t &res = in.second;
+    ECUtil::CompactInfoRef cinfo = res.cinfo;
     assert(res.returned.size() == to_read.size());
     assert(to_read.size() == res.partial_read.size());
     assert(to_read.size() == res.need.size());
-    list<bool>::const_iterator it = res.partial_read.begin();
+
+    list<boost::tuple<uint64_t, uint64_t, map<pg_shard_t, bufferlist> > >::iterator t1 = res.returned.begin();
     list<list<boost::tuple<pg_shard_t, uint64_t, uint64_t> > >::const_iterator nj = res.need.begin();
+    for (; t1 != res.returned.end() && nj != res.need.end(); ++t1, ++nj) {
+      for (list<boost::tuple<pg_shard_t, uint64_t, uint64_t> >::const_iterator j = nj->begin();
+           j != nj->end();
+           ++j) {
+        pg_shard_t shard = j->get<0>();
+        uint64_t offset = j->get<1>();
+        uint64_t len = j->get<2>();
+        bufferlist bl;
+        cinfo->decompact(shard.shard, offset, len, t1->get<2>()[shard], bl, true);
+        t1->get<2>()[shard].swap(bl);
+      }
+    }
+
+    list<bool>::const_iterator it = res.partial_read.begin();
+    nj = res.need.begin();
 
     for (list<pair<boost::tuple<uint64_t, uint64_t, uint32_t>,
 		   pair<bufferlist*, Context*> > >::iterator i = to_read.begin();
@@ -1707,14 +1884,16 @@ struct CallClientContexts :
         assert(res.r == 0);
         assert(res.errors.empty());
         bufferlist bl;
-        for(list<boost::tuple<pg_shard_t, uint64_t, uint64_t> >::const_iterator j = 
-            nj->begin(); 
-            j != nj->end();
-            ++j) {
-          bl.append(res.returned.front().get<2>()[j->get<0>()]); 
+        for (list<boost::tuple<pg_shard_t, uint64_t, uint64_t> >::const_iterator j =
+             nj->begin();
+             j != nj->end();
+             ++j) {
+          bl.append(res.returned.front().get<2>()[j->get<0>()]);
         }
-        assert(bl.length() == i->first.get<1>());
-        i->second.first->swap(bl);
+        i->second.first->substr_of(
+          bl,
+          i->first.get<0>() % ec->sinfo.get_chunk_size(),
+          MIN(i->first.get<1>(), bl.length() - (i->first.get<0>() % ec->sinfo.get_chunk_size())));
       } else {
         if (!ec->subread_all) {
           assert(res.r == 0);
@@ -1722,8 +1901,8 @@ struct CallClientContexts :
         }
         pair<uint64_t, uint64_t> adjusted =
   	ec->sinfo.offset_len_to_stripe_bounds(make_pair(i->first.get<0>(), i->first.get<1>()));
-        assert(res.returned.front().get<0>() == adjusted.first &&
-  	     res.returned.front().get<1>() == adjusted.second);
+//        assert(res.returned.front().get<0>() == adjusted.first &&
+//  	     res.returned.front().get<1>() == adjusted.second);
         map<int, bufferlist> to_decode;
         bufferlist bl;
         int jj = 0;
@@ -1800,6 +1979,14 @@ void ECBackend::objects_read_async(
     &shards);
   assert(r == 0);
 
+  ECUtil::CompactInfoRef cinfo = get_compact_info(hoid);
+  if (!cinfo) {
+      derr << __func__ << ": get_compact_info(" << hoid << ")"
+	   << " returned a null pointer and there is no "
+	   << " way to recover from such an error in this "
+	   << " context" << dendl;
+      assert(0);
+  }
   list<boost::tuple<uint64_t, uint64_t, uint32_t> > offsets;
   pair<uint64_t, uint64_t> tmp;
   list<list<boost::tuple<pg_shard_t, uint64_t, uint64_t> > > to_need;
@@ -1828,14 +2015,15 @@ void ECBackend::objects_read_async(
       uint64_t len = i->first.get<1>();
       bool partial = true;
       do {
-        uint64_t chunk_offset = offset / sinfo.get_stripe_width() * sinfo.get_chunk_size() +
-                                offset % sinfo.get_chunk_size();
+        uint64_t chunk_offset = offset / sinfo.get_stripe_width() * sinfo.get_chunk_size();
         uint64_t shard = offset % sinfo.get_stripe_width() / sinfo.get_chunk_size();
         shard_id_t shard_map = chunk_mapping.size() > shard ? (shard_id_t)chunk_mapping[shard] : (shard_id_t)shard;
         uint64_t r_len = MIN(len, sinfo.get_chunk_size() - offset % sinfo.get_chunk_size());
         if (health_shards.count(shard_map)) { // shard is a health shard
+          pair<uint32_t, uint32_t> loc = cinfo->convert_compact_ranges(shard_map, chunk_offset, sinfo.get_chunk_size());
+          pg_need.push_back(boost::make_tuple(health_shards[shard_map], loc.first, loc.second));
           dout(20) << __func__ << " shard " << health_shards[shard_map] << " offset " << chunk_offset << " r_len " << r_len << dendl;
-          pg_need.push_back(boost::make_tuple(health_shards[shard_map], chunk_offset, r_len));
+          dout(20) << __func__ << " shard " << health_shards[shard_map] << " offset " << loc.first << " r_len " << loc.second << dendl;
           len -= r_len;
           offset = offset + r_len;
         } else { // return back to normal async read
@@ -1854,7 +2042,8 @@ void ECBackend::objects_read_async(
     pair<uint64_t, uint64_t> chunk_off_len =
       sinfo.aligned_offset_len_to_chunk(make_pair(tmp.first, tmp.second));
     for(set<pg_shard_t>::const_iterator j = shards.begin(); j != shards.end(); ++j) {
-      pg_need.push_back(boost::make_tuple(*j, chunk_off_len.first, chunk_off_len.second));
+      pair<uint32_t, uint32_t> loc = cinfo->convert_compact_ranges(j->shard, chunk_off_len.first, chunk_off_len.second);
+      pg_need.push_back(boost::make_tuple(*j, loc.first, loc.second));
     }
     to_need.push_back(pg_need);
     partial_read.push_back(false);
@@ -1870,7 +2059,8 @@ void ECBackend::objects_read_async(
 	to_need,
 	false,
 	c,
-        partial_read)));
+        partial_read,
+        cinfo)));
 
   start_read_op(
     cct->_conf->osd_client_op_priority,
@@ -1894,6 +2084,8 @@ int ECBackend::objects_get_attrs(
        i != out->end();
        ) {
     if (ECUtil::is_hinfo_key_string(i->first))
+      out->erase(i++);
+    else if (ECUtil::is_cinfo_key_string(i->first))
       out->erase(i++);
     else
       ++i;
@@ -1920,43 +2112,64 @@ void ECBackend::be_deep_scrub(
   ScrubMap::object &o,
   ThreadPool::TPHandle &handle) {
   bufferhash h(-1); // we always used -1
-  int r;
-  uint64_t stride = cct->_conf->osd_deep_scrub_stride;
-  if (stride % sinfo.get_chunk_size())
-    stride += sinfo.get_chunk_size() - (stride % sinfo.get_chunk_size());
-  uint64_t pos = 0;
 
-  // Look at whether the obc was in the cache for whether the object is warm or not
-  uint32_t fadvise_flags = CEPH_OSD_OP_FLAG_FADVISE_SEQUENTIAL;
-  if (!get_parent()->is_hot_objects(poid))
-    fadvise_flags |= CEPH_OSD_OP_FLAG_FADVISE_DONTNEED;
-
-  while (true) {
-    bufferlist bl;
-    handle.reset_tp_timeout();
-    r = store->read(
-      coll,
-      ghobject_t(
-	poid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
-      pos,
-      stride, bl,
-      fadvise_flags, true);
-    if (r < 0)
-      break;
-    if (bl.length() % sinfo.get_chunk_size()) {
-      r = -EIO;
-      break;
-    }
-    pos += r;
-    h << bl;
-    if ((unsigned)r < stride)
-      break;
-  }
-
-  if (r == -EIO) {
-    dout(0) << "_scan_list  " << poid << " got "
-	    << r << " on read, read_error" << dendl;
+  bool error = false;
+  ECUtil::CompactInfoRef cinfo = get_compact_info(poid, &error);
+  if (!cinfo || error) {
+    dout(0) << "_scan_list  " << poid << " could not retrieve compact info" << dendl;
     o.read_error = true;
+    o.digest_present = false;
+  }
+  
+  shard_id_t shard = get_parent()->whoami_shard().shard;
+  if (!o.read_error) {
+    int r;
+    uint64_t stride = cct->_conf->osd_deep_scrub_stride;
+    if (stride % sinfo.get_chunk_size())
+      stride += sinfo.get_chunk_size() - (stride % sinfo.get_chunk_size());
+    uint64_t pos = 0;
+    uint64_t read_pos = 0;
+    while (true) {
+      pair<uint32_t, uint32_t> loc = cinfo->convert_compact_ranges(shard, read_pos, stride);
+      if (!loc.second)
+        break;
+      bufferlist bl;
+      handle.reset_tp_timeout();
+      r = store->read(
+        coll,
+        ghobject_t(
+          poid, ghobject_t::NO_GEN, shard),
+        loc.first,
+        loc.second, bl,
+        true);
+      dout(20) << __func__ << " read_pos " << read_pos << " stride " << stride
+               << " offset " << loc.first << " len " << loc.second << " r " << r << dendl;
+      if (r < 0)
+        break;
+      bufferlist dbl;
+      cinfo->decompact(shard, loc.first, loc.second, bl, dbl, true);
+      bl.claim(dbl);
+      if (bl.length() % cinfo->get_chunk_size()) {
+        r = -EIO;
+        break;
+      }
+      pos += r;
+      read_pos += stride;
+      h << bl;
+      if ((unsigned)r < loc.second || pos == cinfo->get_total_chunk_size(shard))
+        break;
+    }
+
+    if (r == -EIO) {
+      dout(0) << "_scan_list  " << poid << " got "
+              << r << " on read, read_error" << dendl;
+      o.read_error = true;
+    }
+
+    if (cinfo->get_total_chunk_size(get_parent()->whoami_shard().shard) != pos) {
+      dout(0) << "_scan_list  " << poid << " got incorrect size on read" << dendl;
+      o.read_error = true;
+    }
   }
 
   ECUtil::HashInfoRef hinfo = get_hash_info(poid);
@@ -1970,11 +2183,6 @@ void ECBackend::be_deep_scrub(
       o.read_error = true;
     }
 
-    if (hinfo->get_total_chunk_size() != pos) {
-      dout(0) << "_scan_list  " << poid << " got incorrect size on read" << dendl;
-      o.read_error = true;
-    }
-
     /* We checked above that we match our own stored hash.  We cannot
      * send a hash of the actual object, so instead we simply send
      * our locally stored hash of shard 0 on the assumption that if
@@ -1982,7 +2190,8 @@ void ECBackend::be_deep_scrub(
      * chunk 0 matches that of our peers, there is likely no corruption.
      */
     o.digest = hinfo->get_chunk_hash(0);
-    o.digest_present = true;
+    if (!o.digest_present)
+      o.digest_present = true;
   }
 
   o.omap_digest = seed;

@@ -151,7 +151,7 @@ private:
   friend struct ECRecoveryHandle;
   uint64_t get_recovery_chunk_size() const {
     return ROUND_UP_TO(cct->_conf->osd_recovery_max_chunk,
-			sinfo.get_stripe_width());
+			2 * sinfo.get_stripe_width());
   }
 
   /**
@@ -220,6 +220,7 @@ private:
     map<shard_id_t, bufferlist> returned_data;
     map<string, bufferlist> xattrs;
     ECUtil::HashInfoRef hinfo;
+    ECUtil::CompactInfoRef cinfo;
     ObjectContextRef obc;
     set<pg_shard_t> waiting_on_pushes;
 
@@ -264,6 +265,7 @@ public:
 	uint64_t, uint64_t, map<pg_shard_t, bufferlist> > > returned;
     list<list<boost::tuple<pg_shard_t, uint64_t, uint64_t> > > need;
     list<bool> partial_read;
+    ECUtil::CompactInfoRef cinfo;
     read_result_t() : r(0) {}
   };
   struct read_request_t {
@@ -272,15 +274,17 @@ public:
     const bool want_attrs;
     GenContext<pair<RecoveryMessages *, read_result_t& > &> *cb;
     const list<bool> partial_read;
+    ECUtil::CompactInfoRef cinfo;
     read_request_t(
       const hobject_t &hoid,
       const list<boost::tuple<uint64_t, uint64_t, uint32_t> > &to_read,
       const list<list<boost::tuple<pg_shard_t, uint64_t, uint64_t> > > &need,
       bool want_attrs,
       GenContext<pair<RecoveryMessages *, read_result_t& > &> *cb,
-      const list<bool> r)
+      const list<bool> r,
+      ECUtil::CompactInfoRef cinfo)
       : to_read(to_read), need(need), want_attrs(want_attrs),
-	cb(cb), partial_read(r) {}
+	cb(cb), partial_read(r), cinfo(cinfo) {}
   };
   friend ostream &operator<<(ostream &lhs, const read_request_t &rhs);
 
@@ -353,6 +357,7 @@ public:
     map<hobject_t, ECUtil::HashInfoRef> unstable_hash_infos;
 
     utime_t start; 
+    map<hobject_t, ECUtil::CompactInfoRef> unstable_compact_infos;
     ~Op() {
       delete t;
       delete on_local_applied_sync;
@@ -368,10 +373,13 @@ public:
 
   void dispatch_recovery_messages(RecoveryMessages &m, int priority);
   friend struct OnRecoveryReadComplete;
+  int read_reply_min_chunk(ECUtil::CompactInfoRef cinfo,
+  map<int, bufferlist>& from, list<boost::tuple<pg_shard_t, uint64_t, uint64_t> > &need);
   void handle_recovery_read_complete(
     const hobject_t &hoid,
     boost::tuple<uint64_t, uint64_t, map<pg_shard_t, bufferlist> > &to_read,
     boost::optional<map<string, bufferlist> > attrs,
+    list<boost::tuple<pg_shard_t, uint64_t, uint64_t> > &need,
     RecoveryMessages *m);
   void handle_recovery_push(
     PushOp &op,
@@ -445,7 +453,9 @@ public:
   bool subread_all;
   /// If modified, ensure that the ref is held until the update is applied
   SharedPtrRegistry<hobject_t, ECUtil::HashInfo> unstable_hashinfo_registry;
+  SharedPtrRegistry<hobject_t, ECUtil::CompactInfo> unstable_compactinfo_registry;
   ECUtil::HashInfoRef get_hash_info(const hobject_t &hoid);
+  ECUtil::CompactInfoRef get_compact_info(const hobject_t &hoid, bool *error = NULL);
 
   friend struct ReadCB;
   void check_op(Op *op);

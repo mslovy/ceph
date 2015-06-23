@@ -197,6 +197,7 @@ public:
     set<hobject_t> *out) const;
   void generate_transactions(
     map<hobject_t, ECUtil::HashInfoRef> &hash_infos,
+    map<hobject_t, ECUtil::CompactInfoRef> &compact_infos,
     ErasureCodeInterfaceRef &ecimpl,
     pg_t pgid,
     const ECUtil::stripe_info_t &sinfo,
