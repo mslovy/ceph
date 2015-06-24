@@ -15,6 +15,7 @@
 #include <sys/socket.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
+//#include <arpa/inet.h>//hf
 #include <sys/uio.h>
 #include <limits.h>
 #include <poll.h>
@@ -296,6 +297,7 @@ int Pipe::accept()
   uint64_t newly_acked_seq = 0;
 
   recv_reset();
+  //entity_addr_t myaddr;//hf
 
   set_socket_options();
 
@@ -319,6 +321,17 @@ int Pipe::accept()
     goto fail_unlocked;
   }
   ::encode(socket_addr, addrs);
+/*hf
+if (socket_addr.addr4.sin_addr.s_addr == inet_addr("192.168.1.1")) {//报文来自网关
+  myaddr = msgr->my_inst.addr;
+  myaddr.addr4.sin_addr.s_addr = inet_addr("172.18.4.36");
+} else {//报文来自内网PC
+  myaddr = msgr->my_inst.addr;
+}
+::encode(myaddr, addrs);
+::encode(socket_addr, addrs);
+ldout(msgr->cct,0) << "hf myaddr" << myaddr << "hf socket_addr" << socket_addr << dendl;
+//hf*/
 
   r = tcp_write(addrs.c_str(), addrs.length());
   if (r < 0) {
@@ -360,6 +373,13 @@ int Pipe::accept()
     ldout(msgr->cct,0) << "accept peer addr is really " << peer_addr
 	    << " (socket is " << socket_addr << ")" << dendl;
   }
+/*hf
+  if (peer_addr.addr4.sin_addr.s_addr == inet_addr("192.168.1.1")) {
+    peer_addr.set_port(socket_addr.get_port());
+    ldout(msgr->cct, 0) << "hf modify port of peer_addr is " << peer_addr << dendl;
+  }
+    ldout(msgr->cct, 0) << "hf set port of peer_addr is " << peer_addr << dendl;
+//hf*/
   set_peer_addr(peer_addr);  // so that connection_state gets set up
   
   while (1) {
@@ -896,6 +916,8 @@ int Pipe::connect()
   AuthAuthorizer *authorizer = NULL;
   bufferlist addrbl, myaddrbl;
   const md_config_t *conf = msgr->cct->_conf;
+	//int r;//hf
+	//socklen_t addrlen;//hf
 
   // close old socket.  this is safe because we stopped the reader thread above.
   if (sd >= 0)
@@ -973,7 +995,17 @@ int Pipe::connect()
   }
 
   ldout(msgr->cct,20) << "connect peer addr for me is " << peer_addr_for_me << dendl;
-
+/*hf
+if (peer_addr_for_me.addr4.sin_addr.s_addr == inet_addr("192.168.1.1")) {
+	r = ::getsockname(sd, (sockaddr*)&socket_addr.ss_addr(), &addrlen);
+	if (r < 0) {
+	  //ldout(msgr->cct,0) << "accept failed to getpeername " << cpp_strerror(errno) << dendl;
+	  //msgr->learned_addr(peer_addr_for_me);
+	}
+	ldout(msgr->cct,20) << "hf get socket_addr for me " << socket_addr << dendl;
+}
+msgr->learned_addr(socket_addr);
+//hf*/
   msgr->learned_addr(peer_addr_for_me);
 
   ::encode(msgr->my_inst.addr, myaddrbl);

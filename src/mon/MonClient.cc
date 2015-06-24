@@ -11,7 +11,6 @@
  * Foundation.  See file COPYING.
  * 
  */
-
 #include "msg/Messenger.h"
 #include "messages/MMonGetMap.h"
 #include "messages/MMonGetVersion.h"
@@ -330,7 +329,9 @@ void MonClient::handle_monmap(MMonMap *m)
 
   _sub_got("monmap", monmap.get_epoch());
 
+//ldout(cct, 10) << "hf cur_con->get_peer_addr() " << cur_con->get_peer_addr() << dendl;//hf
   if (!monmap.get_addr_name(cur_con->get_peer_addr(), cur_mon)) {
+	//if ((cur_con->get_peer_addr()).addr4.sin_addr.s_addr != inet_addr("172.18.4.36")) {//后续换成读取所取得monmap中的nat addr
     ldout(cct, 10) << "mon." << cur_mon << " went away" << dendl;
     _reopen_session();  // can't find the mon we were talking to (above)
   }
