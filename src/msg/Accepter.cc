@@ -127,10 +127,20 @@ int Accepter::bind(const entity_addr_t &bind_addr, const set<int>& avoid_ports)
 		     << ": " << cpp_strerror(rc) << dendl;
     return rc;
   }
-  
-  msgr->set_myaddr(bind_addr);
-  if (bind_addr != entity_addr_t())
-    msgr->learned_addr(bind_addr);
+ 
+ ///*hf
+  entity_addr_t myaddr = bind_addr;
+  if (!(msgr->ip_addr.is_blank_ip()) && !(myaddr.is_same_host(msgr->ip_addr))) {
+		myaddr = msgr->ip_addr;
+		//hf: MON,OSD外网口映射IP在ceph.conf里有设置port则使用,没设置则用listen_addr的默认端口
+		if (msgr->ip_addr.get_port() == 0) {
+			myaddr.set_port(listen_addr.get_port());
+		}
+  }
+//hf*/ 
+  msgr->set_myaddr(myaddr);
+  if (myaddr != entity_addr_t())
+    msgr->learned_addr(myaddr);
   else
     assert(msgr->get_need_addr());  // should still be true.
 
@@ -152,16 +162,17 @@ int Accepter::rebind(const set<int>& avoid_ports)
 {
   ldout(msgr->cct,1) << "accepter.rebind avoid " << avoid_ports << dendl;
   
-  entity_addr_t addr = msgr->get_myaddr();
+  entity_addr_t addr = msgr->bind_addr;
   set<int> new_avoid = avoid_ports;
-  new_avoid.insert(addr.get_port());
-  addr.set_port(0);
+	set<int>::iterator it = new_avoid.find(addr.get_port());
+  if (it != new_avoid.end())
+	  new_avoid.erase(addr.get_port());
 
   // adjust the nonce; we want our entity_addr_t to be truly unique.
   nonce += 1000000;
   msgr->my_inst.addr.nonce = nonce;
-  ldout(msgr->cct,10) << " new nonce " << nonce << " and inst " << msgr->my_inst << dendl;
-
+  ldout(msgr->cct,10) << " new nonce " << nonce << " and inst " << msgr->my_inst <<  dendl;
+  ldout(msgr->cct,10) << " hf msgr->ip_addr " << msgr->ip_addr << " msgr->bind_addr " << msgr->bind_addr <<  dendl;
   ldout(msgr->cct,10) << " will try " << addr << " and avoid ports " << new_avoid << dendl;
   int r = bind(addr, new_avoid);
   if (r == 0)

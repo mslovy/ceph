@@ -54,6 +54,8 @@ public:
    *  from this value.
    */
   CephContext *cct;
+  entity_addr_t ip_addr;//hf
+  entity_addr_t bind_addr;//hf
 
   /**
    * A Policy describes the rules of a Connection. Is there a limit on how

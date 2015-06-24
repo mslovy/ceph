@@ -52,7 +52,45 @@ using namespace std;
 
 #define dout_subsys ceph_subsys_osd
 
+///*hf
+#define BINDPORT_NUM	5
+#define PUBLIC_PORT   6800
+#define CLUSTER_PORT  6801
+#define HB_B_S_PORT   6802
+#define HB_F_S_PORT   6803
+#define OBJECTER_PORT 6804
+#define PUBLIC_PORT_OFFSET   0
+#define CLUSTER_PORT_OFFSET  1
+#define HB_B_S_PORT_OFFSET   2
+#define HB_F_S_PORT_OFFSET   3
+#define OBJECTER_PORT_OFFSET 4
+//hf*/
+
 OSD *osd = NULL;
+
+///*hf
+int cephosd_parse_port(const char *str, int *minport, int *maxport)
+{
+    //cout << " ******* HF: parse port" << str << std::endl;
+	if (sscanf(str, "%u:%u", minport, maxport) != 2) {
+    cout << " ******* HF: parse port -1 " << std::endl;
+		return -1;//错误字符序列,读取失败
+	}
+    //cout << " ******* HF: min" << *minport << "max" << *maxport << std::endl;
+	if (*minport == 0 || *maxport == 0 || *minport >= 0xffff || *maxport >= 0xffff) {
+    cout << " ******* HF: parse port -2 " << std::endl;
+		return -2;//端口非法
+	}
+    //cout << " ******* HF: ret " << (*maxport - *minport + 1) << "  BINDPORT_NUM " << BINDPORT_NUM << std::endl;
+	if ((*maxport - *minport + 1) % BINDPORT_NUM != 0) {
+    cout << " ******* HF: parse port -3 " << std::endl;
+		return -3;//非OSD成组端口数目, 判断为1组大小
+	}
+    //cout << " ******* HF: min" << *minport << "max" << *maxport << std::endl;
+
+	return 0;
+}
+//hf*/
 
 void handle_osd_signal(int signum)
 {
@@ -427,12 +465,66 @@ int main(int argc, const char **argv)
 
   ms_objecter->set_default_policy(Messenger::Policy::lossy_client(0, CEPH_FEATURE_OSDREPLYMUX));
 
-  r = ms_public->bind(g_conf->public_addr);
-  if (r < 0)
+///*hf
+    std::vector <std::string> my_sections;
+    std::string nat_addr_str;
+    entity_addr_t nat_addr;
+    g_conf->get_my_sections(my_sections);
+    if (g_conf->get_val_from_conf_file(my_sections, "nat addr", nat_addr_str, true) == 0) {
+      nat_addr.parse(nat_addr_str.c_str());
+    } else {
+      nat_addr = g_conf->public_addr;
+    }
+    ms_public->ip_addr = nat_addr;
+    ms_hb_front_server->ip_addr = nat_addr;
+    ms_objecter->ip_addr = nat_addr;
+		int nat_port = nat_addr.get_port();
+		if (nat_port != 0) {
+			ms_public->ip_addr.set_port(nat_port + PUBLIC_PORT_OFFSET);
+      ms_hb_front_server->ip_addr.set_port(nat_port + HB_F_S_PORT_OFFSET);
+      ms_objecter->ip_addr.set_port(nat_port + OBJECTER_PORT_OFFSET);
+		}
+    std::string bindport_str;
+		int bindport_min, bindport_max, bindport_start;
+		int public_port, cluster_port, hb_b_s_port, hb_f_s_port, objecter_port;
+    //cout << " ******* HF0: public port is " << public_port << std::endl;
+    if ((g_conf->get_val_from_conf_file(my_sections, "bind port", bindport_str, true) == 0) && 
+			(cephosd_parse_port(bindport_str.c_str(), &bindport_min, &bindport_max) == 0)) {
+      public_port   = bindport_min + PUBLIC_PORT_OFFSET;
+			cluster_port  = bindport_min + CLUSTER_PORT_OFFSET;
+			hb_b_s_port   = bindport_min + HB_B_S_PORT_OFFSET;
+			hb_f_s_port   = bindport_min + HB_F_S_PORT_OFFSET;
+			objecter_port = bindport_min + OBJECTER_PORT_OFFSET;
+    //cout << " ******* HF1: public port is " << public_port << std::endl;
+    } else {
+      public_port   = PUBLIC_PORT;
+			cluster_port  = CLUSTER_PORT;
+			hb_b_s_port   = HB_B_S_PORT;
+			hb_f_s_port   = HB_F_S_PORT;
+			objecter_port = OBJECTER_PORT;
+    //cout << " ******* HF2: public port is " << public_port << std::endl;
+    }
+//hf*/
+
+//hf
+  entity_addr_t myaddr = g_conf->public_addr;
+  myaddr.set_port(public_port);
+    //cout << " ******* HF3: public port is " << public_port << std::endl;
+  r = ms_public->bind(myaddr);
+  if (r < 0) {
+    cout << " ** ERROR: port is unavailable, please check set of ceph.conf " << std::endl;
     exit(1);
-  r = ms_cluster->bind(g_conf->cluster_addr);
-  if (r < 0)
+  }
+  ms_public->bind_addr = myaddr;
+
+  myaddr = g_conf->cluster_addr;
+  myaddr.set_port(cluster_port);
+  r = ms_cluster->bind(myaddr);
+  if (r < 0) {
+    cout << " ** ERROR: port is unavailable, please check set of ceph.conf " << std::endl;
     exit(1);
+  }
+  ms_cluster->bind_addr = myaddr;
 
   // hb back should bind to same ip as cluster_addr (if specified)
   entity_addr_t hb_back_addr = g_conf->osd_heartbeat_addr;
@@ -441,19 +533,33 @@ int main(int argc, const char **argv)
     if (hb_back_addr.is_ip())
       hb_back_addr.set_port(0);
   }
-  r = ms_hb_back_server->bind(hb_back_addr);
-  if (r < 0)
+  myaddr = hb_back_addr;
+  myaddr.set_port(hb_b_s_port);
+  r = ms_hb_back_server->bind(myaddr);
+  if (r < 0) {
+    cout << " ** ERROR: port is unavailable, please check set of ceph.conf " << std::endl;
     exit(1);
+  }
+	ms_hb_back_server->bind_addr = myaddr;
 
   // hb front should bind to same ip as public_addr
   entity_addr_t hb_front_addr = g_conf->public_addr;
   if (hb_front_addr.is_ip())
     hb_front_addr.set_port(0);
-  r = ms_hb_front_server->bind(hb_front_addr);
-  if (r < 0)
+  myaddr = hb_front_addr;
+  myaddr.set_port(hb_f_s_port);
+  r = ms_hb_front_server->bind(myaddr);
+  if (r < 0) {
+    cout << " ** ERROR: port is unavailable, please check set of ceph.conf " << std::endl;
     exit(1);
+  }
+	ms_hb_front_server->bind_addr = myaddr;
 
-  ms_objecter->bind(g_conf->public_addr);
+  myaddr = g_conf->public_addr;
+  myaddr.set_port(objecter_port);
+  ms_objecter->bind(myaddr);
+	ms_objecter->bind_addr = myaddr;
+//hf
 
   // Set up crypto, daemonize, etc.
   global_init_daemonize(g_ceph_context, 0);
