@@ -1600,11 +1600,11 @@ void ECBackend::start_read_op(
 	 ++j) {
       if (need_attrs) {
 	messages[*j].attrs_to_read.insert(i->first);
-        need_attrs = false;
       }
       op.obj_to_source[i->first].insert(*j);
       op.source_to_obj[*j].insert(i->first);
     }
+    need_attrs = false;
     assert(i->second.to_read.size() == i->second.need.size());
     list<boost::tuple<uint64_t, uint64_t, uint32_t> >::const_iterator j = i->second.to_read.begin();
     list<list<boost::tuple<pg_shard_t, uint64_t, uint64_t> > >::const_iterator t = i->second.need.begin();
