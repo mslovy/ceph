@@ -186,6 +186,8 @@ ECBackend::ECBackend(
     sinfo(ec_impl->get_data_chunk_count(), stripe_width),
     partial_read_ratio(g_conf->osd_pool_erasure_code_partial_chunk_read_ratio),
     subread_all(g_conf->osd_pool_erasure_code_subread_all) {
+  if (ec_impl->get_chunk_mapping().size())
+    subread_all = false;
   assert(partial_read_ratio <= 1.0);
   assert((ec_impl->get_data_chunk_count() *
 	  ec_impl->get_chunk_size(stripe_width)) == stripe_width);
