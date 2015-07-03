@@ -1,4 +1,4 @@
-// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*- 
+// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
 // vim: ts=8 sw=2 smarttab
 /*
  * Ceph - scalable distributed file system
@@ -7,9 +7,9 @@
  *
  * This is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
- * License version 2.1, as published by the Free Software 
+ * License version 2.1, as published by the Free Software
  * Foundation.  See file COPYING.
- * 
+ *
  */
 
 #include <sys/types.h>
@@ -201,7 +201,7 @@ int preload_erasure_code()
   return r;
 }
 
-int main(int argc, const char **argv) 
+int main(int argc, const char **argv)
 {
   int err;
 
@@ -361,7 +361,7 @@ int main(int argc, const char **argv)
       catch (const buffer::error& e) {
 	cerr << argv[0] << ": error decoding monmap " << g_conf->monmap << ": " << e.what() << std::endl;
 	exit(1);
-      }      
+      }
     } else {
       int err = monmap.build_initial(g_ceph_context, cerr);
       if (err < 0) {
@@ -409,7 +409,7 @@ int main(int argc, const char **argv)
       monmap.fsid = g_conf->fsid;
       cout << argv[0] << ": set fsid to " << g_conf->fsid << std::endl;
     }
-    
+
     if (monmap.fsid.is_zero()) {
       cerr << argv[0] << ": generated monmap has no fsid; use '--fsid <uuid>'" << std::endl;
       exit(10);
@@ -444,7 +444,7 @@ int main(int argc, const char **argv)
       exit(1);
     }
     store.close();
-    cout << argv[0] << ": created monfs at " << g_conf->mon_data 
+    cout << argv[0] << ": created monfs at " << g_conf->mon_data
 	 << " for " << g_conf->name << std::endl;
     return 0;
   }
@@ -727,14 +727,10 @@ int main(int argc, const char **argv)
        << " fsid " << monmap.get_fsid()
        << dendl;
 
-<<<<<<< HEAD
-  err = msgr->bind(ipaddr);
-=======
 ///*hf
-  messenger->ip_addr = ipaddr;
+  msgr->ip_addr = ipaddr;
 //hf*/
-  err = messenger->bind(bind_addr);
->>>>>>> ceph-0.87-nat-stable
+  err = msgr->bind(bind_addr);
   if (err < 0) {
     derr << "unable to bind monitor to " << bind_addr << dendl;//hf
     prefork.exit(1);

@@ -1,4 +1,4 @@
-// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*- 
+// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
 // vim: ts=8 sw=2 smarttab
 /*
  * Ceph - scalable distributed file system
@@ -7,9 +7,9 @@
  *
  * This is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
- * License version 2.1, as published by the Free Software 
+ * License version 2.1, as published by the Free Software
  * Foundation.  See file COPYING.
- * 
+ *
  */
 
 #include <sys/types.h>
@@ -97,7 +97,7 @@ void handle_osd_signal(int signum)
     osd->handle_signal(signum);
 }
 
-void usage() 
+void usage()
 {
   derr << "usage: ceph-osd -i osdid [--osd-data=path] [--osd-journal=path] "
        << "[--mkfs] [--mkjournal] [--convert-filestore]" << dendl;
@@ -120,7 +120,7 @@ int preload_erasure_code()
   return r;
 }
 
-int main(int argc, const char **argv) 
+int main(int argc, const char **argv)
 {
   vector<const char*> args;
   argv_to_vec(argc, argv, args);
@@ -346,7 +346,7 @@ int main(int argc, const char **argv)
     }
     exit(0);
   }
-  
+
   if (get_journal_fsid) {
     uuid_d fsid;
     int r = store->peek_journal_fsid(&fsid);
@@ -444,7 +444,7 @@ int main(int argc, const char **argv)
 		 g_conf->osd_client_message_cap));
 
   uint64_t supported =
-    CEPH_FEATURE_UID | 
+    CEPH_FEATURE_UID |
     CEPH_FEATURE_NOSRCADDR |
     CEPH_FEATURE_PGID64 |
     CEPH_FEATURE_MSG_AUTH |
@@ -506,10 +506,10 @@ int main(int argc, const char **argv)
       ms_objecter->ip_addr.set_port(nat_port + OBJECTER_PORT_OFFSET);
 		}
     std::string bindport_str;
-		int bindport_min, bindport_max, bindport_start;
+    int bindport_min, bindport_max;
 		int public_port, cluster_port, hb_b_s_port, hb_f_s_port, objecter_port;
     //cout << " ******* HF0: public port is " << public_port << std::endl;
-    if ((g_conf->get_val_from_conf_file(my_sections, "bind port", bindport_str, true) == 0) && 
+    if ((g_conf->get_val_from_conf_file(my_sections, "bind port", bindport_str, true) == 0) &&
 			(cephosd_parse_port(bindport_str.c_str(), &bindport_min, &bindport_max) == 0)) {
       public_port   = bindport_min + PUBLIC_PORT_OFFSET;
 			cluster_port  = bindport_min + CLUSTER_PORT_OFFSET;
