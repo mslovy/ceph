@@ -1020,7 +1020,7 @@ void ECBackend::handle_sub_read(
 	bl, j->get<2>(),
 	false);
       if (r < 0) {
-        assert(subread_all); // only tolerate read failure when turn on the sub-read all flag
+        assert(0); // only tolerate read failure when turn on the sub-read all flag
 	reply->buffers_read.erase(i->first);
 	reply->errors[i->first] = r;
 	break;
