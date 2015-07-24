@@ -262,6 +262,8 @@ void ECUtil::CompactInfo::decompact(uint8_t shard, uint32_t offset, uint32_t len
     assert(src.length() <= len);
     uint32_t start_chunk = conver_compact_range(shard, offset);
     const vector<uint32_t>& ranges = get_chunk_compact_range(shard);
+    ldout(g_ceph_context, 20) << __func__ << " shard " << (unsigned)(shard)
+                              << " ranges " << ranges << dendl;
     uint32_t decode_step = 0;
     for (uint32_t step = 0; step < src.length(); step += decode_step) {
       bufferlist bl, dbl;
@@ -269,10 +271,11 @@ void ECUtil::CompactInfo::decompact(uint8_t shard, uint32_t offset, uint32_t len
       if (start_chunk) {
         decode_step -= ranges[start_chunk - 1];
       }
-      ldout(g_ceph_context, 20) << __func__ << " shard " << (unsigned)(shard) << " step " << step << " decode_step "
-               << decode_step << " length " << src.length() << dendl;
-      if (!whole_decode && step + decode_step > src.length())
+      if (!whole_decode && step + decode_step > src.length()) {
+        ldout(g_ceph_context, 20) << __func__ << " shard " << (unsigned)(shard) << " step " << step
+                                  << " decode_step " << decode_step << " length " << src.length() << dendl;
         break;
+      }
       assert(step + decode_step <= src.length());
       bl.substr_of(src, step, decode_step);
       bl.decompress(buffer::ALG_LZ4, dbl, chunk_size);
