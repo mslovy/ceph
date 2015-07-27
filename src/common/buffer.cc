@@ -33,9 +33,7 @@
 #include <sstream>
 #include <sys/uio.h>
 #include <limits.h>
-#include "lz4.h"
-
-#include "lz4.h"
+#include "common/lz4.h"
 
 namespace ceph {
 
@@ -1874,21 +1872,21 @@ void buffer::list::compress(compression_type alg)
   if (alg == ALG_LZ4) {
     uint32_t max_compressed_size = LZ4_compressBound(input_size);
     bufferptr bp = buffer::create_page_aligned(max_compressed_size);
-    uint32_t actual = LZ4_compress(pch_src, bp.c_str(), input_size);
+    uint32_t actual = LZ4_compress(pch_src, bp.c_str(), input_size, NULL);
     bp.set_length(actual);
     clear();
     push_back(bp);
   }
 }
 
-void buffer::list::compress(compression_type alg, list& dest)
+void buffer::list::compress(compression_type alg, list& dest, char* debug)
 {
   const char* pch_src = c_str();
   uint32_t input_size = length();
   if (alg == ALG_LZ4) {
     uint32_t max_compressed_size = LZ4_compressBound(input_size);
     bufferptr bp = buffer::create_page_aligned(max_compressed_size);
-    uint32_t actual = LZ4_compress(pch_src, bp.c_str(), input_size);
+    uint32_t actual = LZ4_compress(pch_src, bp.c_str(), input_size, debug);
     bp.set_length(actual);
     dest.append(bp);
   }
