@@ -556,7 +556,7 @@ public:
 	       j != i->second.end();
 	       ++j) {
 	    if (j->second)
-	      i->first->attr_cache[j->first] = j->second.get();
+              i->first->cache_xattr(j->first, j->second.get());
 	    else
 	      i->first->attr_cache.erase(j->first);
 	  }

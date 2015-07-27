@@ -222,7 +222,7 @@ void ReplicatedPG::on_local_recover(
       ::encode(recovery_info.oi, bl);
       t->setattr(coll, recovery_info.soid, OI_ATTR, bl);
       if (obc)
-	obc->attr_cache[OI_ATTR] = bl;
+        obc->cache_xattr(OI_ATTR, bl);
     }
   }
 
@@ -7884,7 +7884,7 @@ ObjectContextRef ReplicatedPG::get_object_context(const hobject_t& soid,
 
     if (pool.info.require_rollback()) {
       if (attrs) {
-	obc->attr_cache = *attrs;
+        obc->cache_xattrs(*attrs);
       } else {
 	int r = pgbackend->objects_get_attrs(
 	  soid,

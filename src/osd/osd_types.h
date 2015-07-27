@@ -3330,6 +3330,17 @@ public:
   // attr cache
   map<string, bufferlist> attr_cache;
 
+  void cache_xattr(const string &key, bufferlist &value) {
+    value.rebuild();
+    attr_cache[key] = value;
+  }
+
+  void cache_xattrs(map<string, bufferlist> &attrs) {
+    for (map<string, bufferlist>::iterator i = attrs.begin(); i != attrs.end(); ++i)
+      i->second.rebuild();
+    attr_cache = attrs;
+  }
+
   void fill_in_setattrs(const set<string> &changing, ObjectModDesc *mod) {
     map<string, boost::optional<bufferlist> > to_set;
     for (set<string>::const_iterator i = changing.begin();
