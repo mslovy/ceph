@@ -21,6 +21,13 @@ ceph_objectstore_tool_LDADD += -ldl
 endif # LINUX
 bin_PROGRAMS += ceph-objectstore-tool
 
+
+ceph_objectstore_tool_ruijie_SOURCES = tools/ceph_objectstore_tool_ruijie.cc
+ceph_objectstore_tool_ruijie_LDADD = $(LIBOSD) $(LIBOS) $(CEPH_GLOBAL) $(BOOST_PROGRAM_OPTIONS_LIBS) $(LIBRADOS)
+if LINUX
+ceph_objectstore_tool_ruijie_LDADD += -ldl
+endif # LINUX
+bin_PROGRAMS += ceph_objectstore_tool_ruijie
 endif # WITH_OSD
 
 
