@@ -1816,6 +1816,11 @@ bool ReplicatedBackend::handle_pull_response(
   }
 
   bool first = pi.recovery_progress.first;
+  for (map<string, bufferlist>::iterator it = pop.attrset.begin();
+      it != pop.attrset.end();
+      ++it) {
+    it->second.rebuild();
+  }
   if (first) {
     pi.obc = get_parent()->get_obc(pi.recovery_info.soid, true, &pop.attrset);
     pi.recovery_info.oi = pi.obc->obs.oi;

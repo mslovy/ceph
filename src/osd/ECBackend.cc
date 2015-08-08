@@ -416,7 +416,11 @@ void ECBackend::handle_recovery_read_complete(
 
  if (attrs) {
     op.xattrs.swap(*attrs);
-
+    for (map<string, bufferlist>::iterator it = op.xattrs.begin();
+        it != op.xattrs.end();
+        ++it) {
+      it->second.rebuild();
+    }
     if (!op.obc) {
       op.obc = get_parent()->get_obc(hoid, true, &op.xattrs);
       op.recovery_info.size = op.obc->obs.oi.size;
