@@ -209,6 +209,9 @@ public:
     assert(offset % chunk_size == 0);
     assert(len % chunk_size == 0);
     const vector<uint32_t>& ranges = get_chunk_compact_range(shard);
+    if (ranges.empty()) {
+      return make_pair(0, 0);
+    }
     uint32_t start_chunk = 0;
     if (offset) {
       assert((offset / chunk_size - 1) < ranges.size());
