@@ -2239,7 +2239,7 @@ void ECBackend::be_deep_scrub(
   bufferhash h(-1); // we always used -1
 
   bool error = false;
-  dout(0) << __func__ << " oid " << poid << dendl;
+  dout(10) << __func__ << " oid " << poid << dendl;
 
   ECUtil::CompactInfoRef cinfo = get_compact_info(poid, &error);
   if (!cinfo || error) {
