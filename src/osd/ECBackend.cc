@@ -462,7 +462,7 @@ void ECBackend::handle_recovery_read_complete(
     from[shard].swap(bl);
   }
 
-  assert((min_chunk_size != ((uint64_t) - 1)) && min_chunk_size);
+  assert(min_chunk_size != ((uint64_t) - 1));
 
   for (map<int, bufferlist>::iterator it = from.begin(); it != from.end(); ++it) {
     bufferlist bl;
@@ -660,7 +660,7 @@ void ECBackend::continue_recovery_op(
         }
         pop.data.claim(bl);
 
-        assert(pop.data.length());
+        //assert(pop.data.length());
 
 	if (pop.data.length()) {
           const vector<uint32_t>& source_compacts = op.cinfo->get_chunk_compact_range(mi->shard);

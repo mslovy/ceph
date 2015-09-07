@@ -231,6 +231,8 @@ public:
     if (offset == 0)
       return 0;
     const vector<uint32_t>& ranges = get_chunk_compact_range(shard);
+    if (ranges.empty())
+      return 0;
     for (unsigned i = 0; i < ranges.size(); i++) {
       if (offset < ranges[i]) {
         if (i)
@@ -247,6 +249,9 @@ public:
     if (offset == 0)
       return 0;
     const vector<uint32_t>& ranges = get_chunk_compact_range(shard);
+    if (ranges.empty()) {
+      return 0;
+    }
     for (unsigned i = 0; i < ranges.size(); i++) {
       if (offset == ranges[i])
         return  (i + 1);
@@ -258,7 +263,12 @@ public:
     const bufferlist& src, bufferlist& dst, bool whole_decode);
 
   uint64_t get_total_chunk_size(uint8_t shard) const {
-    return get_chunk_compact_range(shard).back();
+    const vector<uint32_t>& ranges = get_chunk_compact_range(shard);
+    if (ranges.empty()) {
+      return 0;
+    } else {
+      return ranges.back();
+    }
   }
 
   uint64_t get_total_origin_chunk_size() const {
