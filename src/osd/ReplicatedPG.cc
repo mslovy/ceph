@@ -5463,13 +5463,15 @@ void ReplicatedPG::make_writeable(OpContext *ctx)
       osd->logger->inc(l_osd_tier_clean);
     } else if (!was_dirty && !ctx->undirty) {
       dout(20) << " setting DIRTY flag" << dendl;
+      assert(!ctx->new_obs.oi.is_dirty());
       ctx->new_obs.oi.set_flag(object_info_t::FLAG_DIRTY);
       ++ctx->delta_stats.num_objects_dirty;
       osd->logger->inc(l_osd_tier_dirty);
     }
   } else {
     if (was_dirty) {
-      dout(20) << " deletion, decrementing num_dirty and clearing flag" << dendl;
+      dout(20) << " deletion, decrementing num_dirty and clearing flag" << ", "  <<  soid <<  ", osd_tier_with = " << pool.info.tier_of <<dendl;
+      assert(pool.info.tier_of < 0);
       ctx->new_obs.oi.clear_flag(object_info_t::FLAG_DIRTY);
       --ctx->delta_stats.num_objects_dirty;
     }
@@ -7213,6 +7215,7 @@ int ReplicatedPG::try_flush_mark_clean(FlushOpRef fop)
   ctx->at_version = get_next_version();
 
   ctx->new_obs = obc->obs;
+  assert(ctx->new_obs.oi.is_dirty());
   ctx->new_obs.oi.clear_flag(object_info_t::FLAG_DIRTY);
   --ctx->delta_stats.num_objects_dirty;
 
