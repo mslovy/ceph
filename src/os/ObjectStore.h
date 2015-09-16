@@ -21,6 +21,7 @@
 #include "common/TrackedOp.h"
 #include "common/WorkQueue.h"
 #include "ObjectMap.h"
+#include "FDCache.h"
 
 #include <errno.h>
 #include <sys/stat.h>
@@ -69,6 +70,15 @@ enum {
   l_os_bytes,
   l_os_apply_lat,
   l_os_queue_lat,
+  l_os_fdcache_hit,
+  l_os_fdcache_total,
+  l_os_fd_lat,
+  l_os_w_lat,
+  l_os_r_lat,
+  l_os_setkey_lat,
+  l_os_getkey_lat,
+  l_os_setattr_lat,
+  l_os_getattr_lat,
   l_os_last,
 };
 
@@ -1879,6 +1889,12 @@ public:
     uint32_t op_flags = 0,
     bool allow_eio = false) = 0;
 
+   virtual int lfn_open(
+    coll_t cid,
+    const ghobject_t& oid,
+    bool create,
+    FDRef *outfd,
+    Index *index = 0) { return 0; }
   /**
    * fiemap -- get extent map of data of an object
    *

@@ -60,6 +60,8 @@ struct OpRequest : public TrackedOp {
   bool may_read();
   bool may_write();
   bool may_cache();
+  bool may_read_ordered();
+  bool may_ignore_cache();
   bool includes_pg_op();
   bool need_read_cap();
   bool need_write_cap();
@@ -73,6 +75,8 @@ struct OpRequest : public TrackedOp {
   void set_class_write();
   void set_pg_op();
   void set_promote();
+  void set_read_ordered();
+  void set_ignore_cache();
 
   void _dump(utime_t now, Formatter *f) const;
 
@@ -105,6 +109,8 @@ public:
   }
   bool send_map_update;
   epoch_t sent_epoch;
+  utime_t first_dequeued_time;
+  bool already_reply;
   Message *get_req() const { return request; }
   bool been_queued_for_pg() { return hit_flag_points & flag_queued_for_pg; }
   bool been_reached_pg() { return hit_flag_points & flag_reached_pg; }
@@ -118,6 +124,7 @@ public:
   bool currently_started() { return latest_flag_point & flag_started; }
   bool currently_sub_op_sent() { return latest_flag_point & flag_sub_op_sent; }
   bool currently_commit_sent() { return latest_flag_point & flag_commit_sent; }
+  bool been_reply() { return already_reply; }
 
   const char *state_string() const {
     switch(latest_flag_point) {
@@ -158,6 +165,15 @@ public:
     dequeued_time = deq_time;
   }
 
+  utime_t get_first_dequeued_time() const {
+    return first_dequeued_time;
+  }
+  void set_first_dequeued_time(utime_t deq_time) {
+    first_dequeued_time = deq_time;
+  }
+  void set_reply() {
+    already_reply = true;
+  }
   osd_reqid_t get_reqid() const {
     return reqid;
   }

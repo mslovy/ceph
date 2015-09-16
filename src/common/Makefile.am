@@ -3,6 +3,10 @@ libcommon_internal_la_SOURCES = \
 	common/DecayCounter.cc \
 	common/LogClient.cc \
 	common/LogEntry.cc \
+        common/lz4.c \
+        common/lz4frame.c \
+        common/lz4hc.c \
+        common/xxhash.c \
 	common/PrebufferedStreambuf.cc \
 	common/SloppyCRCMap.cc \
 	common/BackTrace.cc \
@@ -233,7 +237,12 @@ noinst_HEADERS += \
 	common/Cycles.h \
 	common/Initialize.h \
 	common/ContextCompletion.h \
-	common/bit_vector.hpp
+	common/bit_vector.hpp \
+        common/lz4frame.h \
+        common/lz4frame_static.h \
+        common/lz4.h \
+        common/lz4hc.h \
+        common/xxhash.h
 
 if ENABLE_XIO
 noinst_HEADERS += \

@@ -49,6 +49,8 @@ public:
       time_t grace,
       time_t suicide_grace)
       : cct(cct), hb(hb), grace(grace), suicide_grace(suicide_grace) {}
+    TPHandle() : cct(NULL) {}
+    CephContext* get_cct() { return cct; };
     void reset_tp_timeout();
     void suspend_tp_timeout();
   };

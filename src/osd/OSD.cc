@@ -887,7 +887,7 @@ void OSDService::share_map_peer(int peer, Connection *con, OSDMapRef map)
       send_incremental_map(pe, con, map);
       note_peer_epoch(peer, map->get_epoch());
     } else
-      dout(20) << "share_map_peer " << con << " already has epoch " << pe << dendl;
+      dout(30) << "share_map_peer " << con << " already has epoch " << pe << dendl;
   } else {
     dout(20) << "share_map_peer " << con << " don't know epoch, doing nothing" << dendl;
     // no idea about peer's epoch.
@@ -2103,20 +2103,35 @@ void OSD::create_logger()
   osd_plb.add_time_avg(l_osd_op_process_lat, "op_process_latency");   // client op process latency
 
   osd_plb.add_u64_counter(l_osd_op_r,      "op_r");        // client reads
+  osd_plb.add_u64_counter(l_osd_op_r_cancel,      "op_r_cancel");        // client reads cancel
   osd_plb.add_u64_counter(l_osd_op_r_outb, "op_r_out_bytes");   // client read out bytes
   osd_plb.add_time_avg(l_osd_op_r_lat,  "op_r_latency");    // client read latency
+  osd_plb.add_time_avg(l_osd_op_r_q_lat, "op_r_queue_latency");   // client read queue latency
   osd_plb.add_time_avg(l_osd_op_r_process_lat, "op_r_process_latency");   // client read process latency
+  osd_plb.add_time_avg(l_osd_client_op_r_lat,  "client_op_r_latency");    // client read latency
+  osd_plb.add_time_avg(l_osd_client_op_r_q_lat,  "client_op_r_queue_latency");    // client read queue latency
+  osd_plb.add_time_avg(l_osd_client_op_r_process_lat,  "client_op_r_process_latency");    // client read latency
+  osd_plb.add_time_avg(l_osd_client_op_r_blocked_lat,  "client_op_r_blocked_latency");    // client read blcoked latency
   osd_plb.add_u64_counter(l_osd_op_w,      "op_w");        // client writes
   osd_plb.add_u64_counter(l_osd_op_w_inb,  "op_w_in_bytes");    // client write in bytes
   osd_plb.add_time_avg(l_osd_op_w_rlat, "op_w_rlat");   // client write readable/applied latency
   osd_plb.add_time_avg(l_osd_op_w_lat,  "op_w_latency");    // client write latency
+  osd_plb.add_time_avg(l_osd_op_w_q_lat, "op_w_queue_latency");   // client write queue latency
   osd_plb.add_time_avg(l_osd_op_w_process_lat, "op_w_process_latency");   // client write process latency
+  osd_plb.add_time_avg(l_osd_client_op_w_lat,  "client_op_w_latency");    // client write latency
+  osd_plb.add_time_avg(l_osd_client_op_w_q_lat,  "client_op_w_queue_latency");    // client write queue latency
+  osd_plb.add_time_avg(l_osd_client_op_w_process_lat,  "client_op_w_process_latency");    // client write latency
+  osd_plb.add_time_avg(l_osd_client_op_w_blocked_lat,  "client_op_w_blocked_latency");    // client write blcoked latency
   osd_plb.add_u64_counter(l_osd_op_rw,     "op_rw");       // client rmw
   osd_plb.add_u64_counter(l_osd_op_rw_inb, "op_rw_in_bytes");   // client rmw in bytes
   osd_plb.add_u64_counter(l_osd_op_rw_outb,"op_rw_out_bytes");  // client rmw out bytes
   osd_plb.add_time_avg(l_osd_op_rw_rlat,"op_rw_rlat");  // client rmw readable/applied latency
   osd_plb.add_time_avg(l_osd_op_rw_lat, "op_rw_latency");   // client rmw latency
+  osd_plb.add_time_avg(l_osd_op_rw_q_lat, "op_rw_queue_latency");   // client write queue latency
   osd_plb.add_time_avg(l_osd_op_rw_process_lat, "op_rw_process_latency");   // client rmw process latency
+  osd_plb.add_time_avg(l_osd_ec_op_r_lat, "ec_op_r_latency");   // client rmw process latency
+  osd_plb.add_time_avg(l_osd_ec_op_partial_r_lat, "ec_op_partial_r_latency");   // client rmw process latency
+  osd_plb.add_time_avg(l_osd_ec_op_w_lat, "ec_op_w_latency");   // client rmw process latency
 
   osd_plb.add_u64_counter(l_osd_sop,       "subop");         // subops
   osd_plb.add_u64_counter(l_osd_sop_inb,   "subop_in_bytes");     // subop in bytes
@@ -2161,6 +2176,8 @@ void OSD::create_logger()
 
   osd_plb.add_u64_counter(l_osd_copyfrom, "copyfrom");
 
+  osd_plb.add_u64_counter(l_osd_tier_r_promote, "tier_r_promote");
+  osd_plb.add_u64_counter(l_osd_tier_w_promote, "tier_w_promote");
   osd_plb.add_u64_counter(l_osd_tier_promote, "tier_promote");
   osd_plb.add_u64_counter(l_osd_tier_flush, "tier_flush");
   osd_plb.add_u64_counter(l_osd_tier_flush_fail, "tier_flush_fail");
@@ -2180,6 +2197,17 @@ void OSD::create_logger()
 
   osd_plb.add_u64_counter(l_osd_object_ctx_cache_hit, "object_ctx_cache_hit");
   osd_plb.add_u64_counter(l_osd_object_ctx_cache_total, "object_ctx_cache_total");
+
+  osd_plb.add_u64_counter(l_osd_op_tier_r_total, "op_tier_r_total");
+  osd_plb.add_u64_counter(l_osd_op_tier_w_total, "op_tier_w_total");
+  osd_plb.add_u64_counter(l_osd_op_tier_total, "op_tier_total");
+  osd_plb.add_u64_counter(l_osd_op_tier_r_hit, "op_tier_r_hit");
+  osd_plb.add_u64_counter(l_osd_op_tier_w_hit, "op_tier_w_hit");
+  osd_plb.add_u64_counter(l_osd_op_tier_hit, "op_tier_hit");
+  osd_plb.add_time_avg(l_osd_tier_flush_lat, "osd_tier_flush_lat");
+  osd_plb.add_time_avg(l_osd_tier_promote_lat, "osd_tier_promote_lat");
+  osd_plb.add_time_avg(l_osd_tier_r_lat, "osd_tier_r_lat");
+  osd_plb.add_time_avg(l_osd_client_tier_r_lat, "osd_client_tier_r_lat");
 
   logger = osd_plb.create_perf_counters();
   cct->get_perfcounters_collection()->add(logger);
@@ -5999,7 +6027,7 @@ void OSD::sched_scrub()
 	    (load_is_low ||
 	     (double)diff >= cct->_conf->osd_scrub_max_interval ||
 	     pg->scrubber.must_scrub)) {
-	  dout(10) << "sched_scrub scrubbing " << pgid << " at " << t
+	  dout(30) << "sched_scrub scrubbing " << pgid << " at " << t
 		   << (pg->scrubber.must_scrub ? ", explicitly requested" :
 		   ( (double)diff >= cct->_conf->osd_scrub_max_interval ? ", diff >= max" : ""))
 		   << dendl;
@@ -7870,6 +7898,13 @@ bool OSD::_recover_now()
 
 void OSD::do_recovery(PG *pg, ThreadPool::TPHandle &handle)
 {
+  if (g_conf->osd_recovery_sleep > 0) {
+    utime_t t;
+    t.set_from_double(g_conf->osd_recovery_sleep);
+    t.sleep();
+    dout(20) << __func__ << " slept for " << t << dendl;
+  }
+
   // see how many we should try to start.  note that this is a bit racy.
   recovery_wq.lock();
   int max = MIN(cct->_conf->osd_recovery_max_active - recovery_ops_active,
@@ -8395,6 +8430,9 @@ void OSD::dequeue_op(
 {
   utime_t now = ceph_clock_now(cct);
   op->set_dequeued_time(now);
+  if (op->get_first_dequeued_time().is_zero()) {
+    op->set_first_dequeued_time(now);
+  }
   utime_t latency = now - op->get_req()->get_recv_stamp();
   dout(10) << "dequeue_op " << op << " prio " << op->get_req()->get_priority()
 	   << " cost " << op->get_req()->get_cost()
@@ -8673,6 +8711,10 @@ int OSD::init_op_flags(OpRequestRef& op)
 
     if (ceph_osd_op_mode_cache(iter->op.op))
       op->set_cache();
+    if (m->get_flags() & CEPH_OSD_FLAG_RWORDERED)
+      op->set_read_ordered();
+    if (m->get_flags() & CEPH_OSD_FLAG_IGNORE_CACHE)
+      op->set_ignore_cache();
 
     switch (iter->op.op) {
     case CEPH_OSD_OP_CALL:

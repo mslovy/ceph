@@ -2354,6 +2354,18 @@ TEST(BufferHash, all) {
   }
 }
 
+TEST(BufferList, compress) {
+  {
+    bufferlist bl, dl, sl;
+    bl.append("ABCDEFG");
+    uint32_t len = bl.length();
+    char debug[20];
+    bl.compress(buffer::ALG_LZ4, dl, debug);
+    dl.decompress(buffer::ALG_LZ4, sl, len);
+    EXPECT_EQ(strcmp(debug, "debug"), 0);
+    ASSERT_TRUE(bl == sl);
+   }
+}
 /*
  * Local Variables:
  * compile-command: "cd .. ; make unittest_bufferlist && 

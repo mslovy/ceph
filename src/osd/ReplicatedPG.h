@@ -215,7 +215,7 @@ public:
     OpRequestRef op;
     hobject_t soid;
     ceph_tid_t objecter_tid;
-    vector<OSDOp> &ops;
+    vector<OSDOp> ops;
     version_t user_version;
     int data_offset;
     bool canceled;              ///< true if canceled
@@ -369,8 +369,12 @@ public:
   }
   ObjectContextRef get_obc(
     const hobject_t &hoid,
-    map<string, bufferlist> &attrs) {
-    return get_object_context(hoid, true, &attrs);
+    bool can_create,
+    map<string, bufferlist> *attrs) {
+    return get_object_context(hoid, can_create, attrs);
+  }
+  bool is_blocked_object(const hobject_t &hoid) {
+    return waiting_for_unreadable_object.count(hoid) || waiting_for_degraded_object.count(hoid);
   }
   void log_operation(
     const vector<pg_log_entry_t> &logv,
@@ -897,7 +901,7 @@ protected:
   void hit_set_persist();   ///< persist hit info
   bool hit_set_apply_log(); ///< apply log entries to update in-memory HitSet
   void hit_set_trim(RepGather *repop, unsigned max); ///< discard old HitSets
-  void hit_set_in_memory_trim();                     ///< discard old in memory HitSets
+  void hit_set_in_memory_trim(uint32_t max_in_memory); ///< discard old in memory HitSets
 
   hobject_t get_hit_set_current_object(utime_t stamp);
   hobject_t get_hit_set_archive_object(utime_t start, utime_t end);
@@ -910,8 +914,11 @@ protected:
 
   void agent_setup();       ///< initialize agent state
   bool agent_work(int max); ///< entry point to do some agent work
-  bool agent_maybe_flush(ObjectContextRef& obc);  ///< maybe flush
-  bool agent_maybe_evict(ObjectContextRef& obc);  ///< maybe evict
+  bool suggests_hot_object(hobject_t& o, int type);
+  bool agent_maybe_flush(ObjectContextRef& obc, bool hot_object);  ///< maybe flush
+  bool agent_maybe_evict(ObjectContextRef& obc, bool hot_object);  ///< maybe evict
+  void hot_objects_update(OpRequestRef op);
+  bool is_hot_objects(const hobject_t& o);
 
   void agent_load_hit_sets();  ///< load HitSets, if needed
 
@@ -967,6 +974,8 @@ protected:
 
   // projected object info
   SharedLRU<hobject_t, ObjectContext> object_contexts;
+  // the hotest object accessed by client
+  SimpleLRU<hobject_t, bool> hot_objects;
   // map from oid.snapdir() to SnapSetContext *
   map<hobject_t, SnapSetContext*> snapset_contexts;
   Mutex snapset_contexts_lock;
@@ -1167,7 +1176,8 @@ protected:
   void promote_object(ObjectContextRef obc,            ///< [optional] obc
 		      const hobject_t& missing_object, ///< oid (if !obc)
 		      const object_locator_t& oloc,    ///< locator for obc|oid
-		      OpRequestRef op);                ///< [optional] client op
+		      OpRequestRef op,                ///< [optional] client op
+		      OpRequestRef src_op);                ///< [optional] client op
 
   /**
    * Check if the op is such that we can skip promote (e.g., DELETE)
@@ -1306,7 +1316,7 @@ protected:
    */
   void start_copy(CopyCallback *cb, ObjectContextRef obc, hobject_t src,
 		  object_locator_t oloc, version_t version, unsigned flags,
-		  bool mirror_snapset);
+		  bool mirror_snapset, OpRequestRef op);
   void process_copy_chunk(hobject_t oid, ceph_tid_t tid, int r);
   void _write_copy_chunk(CopyOpRef cop, PGBackend::PGTransaction *t);
   uint64_t get_copy_chunk_size() const {
@@ -1374,8 +1384,9 @@ protected:
   map<hobject_t, list<OpRequestRef> > in_progress_proxy_reads;
 
   void do_proxy_read(OpRequestRef op);
-  void finish_proxy_read(hobject_t oid, ceph_tid_t tid, int r);
+  void finish_proxy_read(hobject_t oid, ceph_tid_t tid, int r, utime_t lat);
   void kick_proxy_read_blocked(hobject_t& soid);
+  void requeue_proxy_read(hobject_t& soid);
   void cancel_proxy_read(ProxyReadOpRef prdop);
   void cancel_proxy_read_ops(bool requeue);
 

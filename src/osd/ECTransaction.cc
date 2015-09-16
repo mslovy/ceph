@@ -22,6 +22,10 @@
 #include "ECUtil.h"
 #include "os/ObjectStore.h"
 
+#define dout_subsys ceph_subsys_osd
+#undef dout_prefix
+#define dout_prefix *_dout << "osd "
+
 struct AppendObjectsGenerator: public boost::static_visitor<void> {
   set<hobject_t> *out;
   AppendObjectsGenerator(set<hobject_t> *out) : out(out) {}
@@ -59,6 +63,7 @@ void ECTransaction::get_append_objects(
 
 struct TransGenerator : public boost::static_visitor<void> {
   map<hobject_t, ECUtil::HashInfoRef> &hash_infos;
+  map<hobject_t, ECUtil::CompactInfoRef> &compact_infos;
 
   ErasureCodeInterfaceRef &ecimpl;
   const pg_t pgid;
@@ -70,6 +75,7 @@ struct TransGenerator : public boost::static_visitor<void> {
   stringstream *out;
   TransGenerator(
     map<hobject_t, ECUtil::HashInfoRef> &hash_infos,
+    map<hobject_t, ECUtil::CompactInfoRef> &compact_infos,
     ErasureCodeInterfaceRef &ecimpl,
     pg_t pgid,
     const ECUtil::stripe_info_t &sinfo,
@@ -78,6 +84,7 @@ struct TransGenerator : public boost::static_visitor<void> {
     set<hobject_t> *temp_removed,
     stringstream *out)
     : hash_infos(hash_infos),
+      compact_infos(compact_infos),
       ecimpl(ecimpl), pgid(pgid),
       sinfo(sinfo),
       trans(trans),
@@ -130,6 +137,19 @@ struct TransGenerator : public boost::static_visitor<void> {
 	ghobject_t(op.oid, ghobject_t::NO_GEN, i->first),
 	ECUtil::get_hinfo_key(),
 	hbuf);
+
+      assert(compact_infos.count(op.oid));
+      ECUtil::CompactInfoRef cinfo = compact_infos[op.oid];
+      bufferlist cbuf;
+      ::encode(
+	*cinfo,
+	cbuf);
+      i->second.setattr(
+	get_coll_ct(i->first, op.oid),
+	ghobject_t(op.oid, ghobject_t::NO_GEN, i->first),
+	ECUtil::get_cinfo_key(),
+	cbuf);
+
     }
   }
   void operator()(const ECTransaction::AppendOp &op) {
@@ -141,6 +161,7 @@ struct TransGenerator : public boost::static_visitor<void> {
 
     assert(hash_infos.count(op.oid));
     ECUtil::HashInfoRef hinfo = hash_infos[op.oid];
+    ECUtil::CompactInfoRef cinfo = compact_infos[op.oid];
 
     // align
     if (bl.length() % sinfo.get_stripe_width())
@@ -158,8 +179,39 @@ struct TransGenerator : public boost::static_visitor<void> {
     ::encode(
       *hinfo,
       hbuf);
-
     assert(r == 0);
+
+    uint32_t append_size = buffers.begin()->second.length();
+    map<uint8_t, vector<uint32_t> > to_append;
+    map<uint8_t, unsigned> pre_offsets;
+    for (map<int, bufferlist>::iterator it = buffers.begin(); it != buffers.end(); ++it) {
+      assert(it->second.length() % sinfo.get_chunk_size() == 0);
+      const vector<uint32_t>& ranges = cinfo->get_chunk_compact_range(it->first);
+      assert(op.off / sinfo.get_stripe_width() == ranges.size());
+      unsigned pre_offset = op.off / sinfo.get_stripe_width() > 0 ? ranges[op.off / sinfo.get_stripe_width() - 1] : 0;
+      pre_offsets[it->first] = pre_offset;
+      bufferlist bl;
+      for (uint32_t i = 0; i < it->second.length(); i += sinfo.get_chunk_size()) {
+        bufferlist src;
+        src.substr_of(it->second, i, sinfo.get_chunk_size());
+        bufferlist cebl;
+        src.compress(buffer::ALG_LZ4, cebl);
+        pre_offset += cebl.length();
+        bl.claim_append(cebl);
+        to_append[it->first].push_back(pre_offset);
+      }
+      it->second.claim(bl);
+    }
+
+    cinfo->append(
+      sinfo.aligned_logical_offset_to_chunk_offset(op.off),
+      to_append,
+      append_size);
+    bufferlist cbuf;
+    ::encode(
+      *cinfo,
+      cbuf);
+ 
     for (map<shard_id_t, ObjectStore::Transaction>::iterator i = trans->begin();
 	 i != trans->end();
 	 ++i) {
@@ -168,8 +220,7 @@ struct TransGenerator : public boost::static_visitor<void> {
       i->second.write(
 	get_coll_ct(i->first, op.oid),
 	ghobject_t(op.oid, ghobject_t::NO_GEN, i->first),
-	sinfo.logical_to_prev_chunk_offset(
-	  offset),
+        pre_offsets[i->first],
 	enc_bl.length(),
 	enc_bl,
 	op.fadvise_flags);
@@ -178,12 +229,23 @@ struct TransGenerator : public boost::static_visitor<void> {
 	ghobject_t(op.oid, ghobject_t::NO_GEN, i->first),
 	ECUtil::get_hinfo_key(),
 	hbuf);
+      i->second.setattr(
+	get_coll_ct(i->first, op.oid),
+	ghobject_t(op.oid, ghobject_t::NO_GEN, i->first),
+	ECUtil::get_cinfo_key(),
+	cbuf);
+
     }
   }
   void operator()(const ECTransaction::CloneOp &op) {
     assert(hash_infos.count(op.source));
     assert(hash_infos.count(op.target));
     *(hash_infos[op.target]) = *(hash_infos[op.source]);
+
+    assert(compact_infos.count(op.source));
+    assert(compact_infos.count(op.target));
+    *(compact_infos[op.target]) = *(compact_infos[op.source]);
+
     for (map<shard_id_t, ObjectStore::Transaction>::iterator i = trans->begin();
 	 i != trans->end();
 	 ++i) {
@@ -198,6 +260,12 @@ struct TransGenerator : public boost::static_visitor<void> {
     assert(hash_infos.count(op.destination));
     *(hash_infos[op.destination]) = *(hash_infos[op.source]);
     hash_infos[op.source]->clear();
+
+    assert(compact_infos.count(op.source));
+    assert(compact_infos.count(op.destination));
+    *(compact_infos[op.destination]) = *(compact_infos[op.source]);
+    compact_infos[op.source]->clear();
+
     for (map<shard_id_t, ObjectStore::Transaction>::iterator i = trans->begin();
 	 i != trans->end();
 	 ++i) {
@@ -211,6 +279,10 @@ struct TransGenerator : public boost::static_visitor<void> {
   void operator()(const ECTransaction::StashOp &op) {
     assert(hash_infos.count(op.oid));
     hash_infos[op.oid]->clear();
+
+    assert(compact_infos.count(op.oid));
+    compact_infos[op.oid]->clear();
+
     for (map<shard_id_t, ObjectStore::Transaction>::iterator i = trans->begin();
 	 i != trans->end();
 	 ++i) {
@@ -225,6 +297,10 @@ struct TransGenerator : public boost::static_visitor<void> {
   void operator()(const ECTransaction::RemoveOp &op) {
     assert(hash_infos.count(op.oid));
     hash_infos[op.oid]->clear();
+
+    assert(compact_infos.count(op.oid));
+    compact_infos[op.oid]->clear();
+
     for (map<shard_id_t, ObjectStore::Transaction>::iterator i = trans->begin();
 	 i != trans->end();
 	 ++i) {
@@ -257,6 +333,7 @@ struct TransGenerator : public boost::static_visitor<void> {
   void operator()(const ECTransaction::AllocHintOp &op) {
     // logical_to_next_chunk_offset() scales down both aligned and
     // unaligned offsets
+    assert(false); // Do not Support AllocHintOp when compress ec pool
     uint64_t object_size = sinfo.logical_to_next_chunk_offset(
                                                     op.expected_object_size);
     uint64_t write_size = sinfo.logical_to_next_chunk_offset(
@@ -277,6 +354,7 @@ struct TransGenerator : public boost::static_visitor<void> {
 
 void ECTransaction::generate_transactions(
   map<hobject_t, ECUtil::HashInfoRef> &hash_infos,
+  map<hobject_t, ECUtil::CompactInfoRef> &compact_infos,
   ErasureCodeInterfaceRef &ecimpl,
   pg_t pgid,
   const ECUtil::stripe_info_t &sinfo,
@@ -287,6 +365,7 @@ void ECTransaction::generate_transactions(
 {
   TransGenerator gen(
     hash_infos,
+    compact_infos,
     ecimpl,
     pgid,
     sinfo,

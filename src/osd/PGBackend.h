@@ -163,7 +163,12 @@
 
      virtual ObjectContextRef get_obc(
        const hobject_t &hoid,
-       map<string, bufferlist> &attrs) = 0;
+       bool can_create,
+       map<string, bufferlist> *attrs=0) = 0;
+    
+     virtual bool is_hot_objects(const hobject_t& o) = 0;
+
+     virtual bool is_blocked_object(const hobject_t &hoid) = 0;
 
      virtual void op_applied(
        const eversion_t &applied_version) = 0;
@@ -586,6 +591,9 @@
      const list<pair<boost::tuple<uint64_t, uint64_t, uint32_t>,
 		pair<bufferlist*, Context*> > > &to_read,
      Context *on_complete) = 0;
+
+   virtual void object_preheat(
+     const hobject_t &hoid, OpRequestRef op) {}
 
    virtual bool scrub_supported() { return false; }
    void be_scan_list(

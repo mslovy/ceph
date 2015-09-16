@@ -146,12 +146,13 @@ public:
     const list<pair<boost::tuple<uint64_t, uint64_t, uint32_t>,
 		    pair<bufferlist*, Context*> > > &to_read,
     Context *on_complete);
+  void object_preheat(const hobject_t &hoid, OpRequestRef op);
 
 private:
   friend struct ECRecoveryHandle;
   uint64_t get_recovery_chunk_size() const {
     return ROUND_UP_TO(cct->_conf->osd_recovery_max_chunk,
-			sinfo.get_stripe_width());
+			2 * sinfo.get_stripe_width());
   }
 
   /**
@@ -220,6 +221,7 @@ private:
     map<shard_id_t, bufferlist> returned_data;
     map<string, bufferlist> xattrs;
     ECUtil::HashInfoRef hinfo;
+    ECUtil::CompactInfoRef cinfo;
     ObjectContextRef obc;
     set<pg_shard_t> waiting_on_pushes;
 
@@ -262,21 +264,28 @@ public:
     list<
       boost::tuple<
 	uint64_t, uint64_t, map<pg_shard_t, bufferlist> > > returned;
+    list<list<boost::tuple<pg_shard_t, uint64_t, uint64_t> > > need;
+    list<bool> partial_read;
+    ECUtil::CompactInfoRef cinfo;
     read_result_t() : r(0) {}
   };
   struct read_request_t {
     const list<boost::tuple<uint64_t, uint64_t, uint32_t> > to_read;
-    const set<pg_shard_t> need;
+    const list<list<boost::tuple<pg_shard_t, uint64_t, uint64_t> > > need;
     const bool want_attrs;
     GenContext<pair<RecoveryMessages *, read_result_t& > &> *cb;
+    const list<bool> partial_read;
+    ECUtil::CompactInfoRef cinfo;
     read_request_t(
       const hobject_t &hoid,
       const list<boost::tuple<uint64_t, uint64_t, uint32_t> > &to_read,
-      const set<pg_shard_t> &need,
+      const list<list<boost::tuple<pg_shard_t, uint64_t, uint64_t> > > &need,
       bool want_attrs,
-      GenContext<pair<RecoveryMessages *, read_result_t& > &> *cb)
+      GenContext<pair<RecoveryMessages *, read_result_t& > &> *cb,
+      const list<bool> r,
+      ECUtil::CompactInfoRef cinfo)
       : to_read(to_read), need(need), want_attrs(want_attrs),
-	cb(cb) {}
+	cb(cb), partial_read(r), cinfo(cinfo) {}
   };
   friend ostream &operator<<(ostream &lhs, const read_request_t &rhs);
 
@@ -294,6 +303,8 @@ public:
     void dump(Formatter *f) const;
 
     set<pg_shard_t> in_progress;
+ 
+    utime_t start;
   };
   friend struct FinishReadOp;
   void filter_read_op(
@@ -345,6 +356,9 @@ public:
     set<pg_shard_t> pending_apply;
 
     map<hobject_t, ECUtil::HashInfoRef> unstable_hash_infos;
+
+    utime_t start; 
+    map<hobject_t, ECUtil::CompactInfoRef> unstable_compact_infos;
     ~Op() {
       delete t;
       delete on_local_applied_sync;
@@ -360,10 +374,13 @@ public:
 
   void dispatch_recovery_messages(RecoveryMessages &m, int priority);
   friend struct OnRecoveryReadComplete;
+  int read_reply_min_chunk(ECUtil::CompactInfoRef cinfo,
+  map<int, bufferlist>& from, list<boost::tuple<pg_shard_t, uint64_t, uint64_t> > &need);
   void handle_recovery_read_complete(
     const hobject_t &hoid,
     boost::tuple<uint64_t, uint64_t, map<pg_shard_t, bufferlist> > &to_read,
     boost::optional<map<string, bufferlist> > attrs,
+    list<boost::tuple<pg_shard_t, uint64_t, uint64_t> > &need,
     RecoveryMessages *m);
   void handle_recovery_push(
     PushOp &op,
@@ -431,9 +448,15 @@ public:
 
 
   const ECUtil::stripe_info_t sinfo;
+  const float partial_read_ratio;
+  // This flag indicates whether we issue subread requests to all replicas (
+  // data and parity), this can improve performance with some I/O overhead
+  bool subread_all;
   /// If modified, ensure that the ref is held until the update is applied
   SharedPtrRegistry<hobject_t, ECUtil::HashInfo> unstable_hashinfo_registry;
+  SharedPtrRegistry<hobject_t, ECUtil::CompactInfo> unstable_compactinfo_registry;
   ECUtil::HashInfoRef get_hash_info(const hobject_t &hoid);
+  ECUtil::CompactInfoRef get_compact_info(const hobject_t &hoid, bool *error = NULL);
 
   friend struct ReadCB;
   void check_op(Op *op);
@@ -455,6 +478,12 @@ public:
     bool for_recovery,         ///< [in] true if we may use non-acting replicas
     set<pg_shard_t> *to_read   ///< [out] shards to read
     ); ///< @return error code, 0 on success
+
+  void get_no_missing_read_shards(
+    const hobject_t &hoid,
+    set<int>& have,
+    map<shard_id_t, pg_shard_t>& shards
+  );
 
   int objects_get_attrs(
     const hobject_t &hoid,

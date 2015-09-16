@@ -22,8 +22,10 @@
 #include "erasure-code/ErasureCodeInterface.h"
 #include "include/buffer.h"
 #include "include/assert.h"
+#include "include/types.h"
 #include "include/encoding.h"
 #include "common/Formatter.h"
+#include "common/debug.h"
 
 namespace ECUtil {
 
@@ -149,6 +151,137 @@ typedef ceph::shared_ptr<HashInfo> HashInfoRef;
 bool is_hinfo_key_string(const string &key);
 const string &get_hinfo_key();
 
+class CompactInfo {
+  uint64_t total_origin_chunk_size;
+  uint32_t stripe_width;
+  uint32_t chunk_size;
+  map<string, uint32_t> attrs;
+  map<uint8_t, vector<uint32_t> > stripe_compact_range;
+public:
+  CompactInfo() : total_origin_chunk_size(0) {}
+  CompactInfo(uint8_t num_chunks, uint32_t stripe_width, uint32_t chunk_size)
+  : total_origin_chunk_size(0), stripe_width(stripe_width), chunk_size(chunk_size) {
+    for (uint8_t i = 0; i < num_chunks; i++) {
+      stripe_compact_range[(shard_id_t)i];
+    }
+  }
+  uint32_t get_stripe_width() const {
+    return stripe_width;
+  }
+  uint32_t get_chunk_size() const {
+    return chunk_size;
+  }
+  void append(uint64_t old_size, map<uint8_t, vector<uint32_t> > &to_append,
+    uint64_t append_size) {
+    assert(to_append.size() == stripe_compact_range.size());
+    assert(old_size == total_origin_chunk_size);
+    uint64_t size_to_append = to_append.begin()->second.size();
+    for (map<uint8_t, vector<uint32_t> >::iterator i = to_append.begin();
+	 i != to_append.end();
+	 ++i) {
+      assert(size_to_append == i->second.size());
+      assert(i->first < stripe_compact_range.size());
+      stripe_compact_range[i->first].insert(stripe_compact_range[i->first].end(),
+        i->second.begin(), i->second.end());
+    }
+    total_origin_chunk_size += append_size;
+  }
+  void clear() {
+    total_origin_chunk_size = 0;
+    unsigned num_chunks = stripe_compact_range.size();
+    for (uint8_t i = 0; i < num_chunks; i++) {
+      stripe_compact_range[i].clear();
+    }
+  }
+  void encode(bufferlist &bl) const;
+  void decode(bufferlist::iterator &bl);
+  void dump(Formatter *f) const;
+  static void generate_test_instances(list<CompactInfo*>& o);
+
+  const vector<uint32_t>& get_chunk_compact_range(uint8_t shard) const {
+    map<uint8_t, vector<uint32_t> >::const_iterator it = stripe_compact_range.find(shard);
+    assert(it != stripe_compact_range.end());
+    return it->second;
+  }
+
+  pair<uint32_t, uint32_t> convert_compact_ranges(uint8_t shard,
+    uint32_t offset, uint32_t len) {
+    assert(offset % chunk_size == 0);
+    assert(len % chunk_size == 0);
+    const vector<uint32_t>& ranges = get_chunk_compact_range(shard);
+    if (ranges.empty()) {
+      return make_pair(0, 0);
+    }
+    uint32_t start_chunk = 0;
+    if (offset) {
+      assert((offset / chunk_size - 1) < ranges.size());
+      start_chunk = ranges[offset / chunk_size - 1];
+    }
+
+    uint32_t end_chunk = 0;
+    if ((offset + len) / chunk_size > 1)
+      end_chunk = (offset + len) / chunk_size - 1;
+    if (end_chunk >= ranges.size())
+      end_chunk = ranges.size() - 1;
+    assert(ranges[end_chunk] >= start_chunk);
+    return make_pair(start_chunk, ranges[end_chunk] - start_chunk);
+  }
+
+  uint32_t conver_compact_min_range(uint8_t shard, uint32_t offset) {
+    if (offset == 0)
+      return 0;
+    const vector<uint32_t>& ranges = get_chunk_compact_range(shard);
+    if (ranges.empty())
+      return 0;
+    for (unsigned i = 0; i < ranges.size(); i++) {
+      if (offset < ranges[i]) {
+        if (i)
+          return (i - 1);
+        else
+          assert(false);
+      } else if (offset == ranges[i])
+        return i;
+    }
+    return ranges.size() - 1;
+  }
+
+  uint32_t conver_compact_range(uint8_t shard, uint32_t offset) {
+    if (offset == 0)
+      return 0;
+    const vector<uint32_t>& ranges = get_chunk_compact_range(shard);
+    if (ranges.empty()) {
+      return 0;
+    }
+    for (unsigned i = 0; i < ranges.size(); i++) {
+      if (offset == ranges[i])
+        return  (i + 1);
+    }
+    assert(false);
+  }
+
+  void decompact(uint8_t shard, uint32_t offset, uint32_t len,
+    const bufferlist& src, bufferlist& dst, bool whole_decode);
+
+  uint64_t get_total_chunk_size(uint8_t shard) const {
+    const vector<uint32_t>& ranges = get_chunk_compact_range(shard);
+    if (ranges.empty()) {
+      return 0;
+    } else {
+      return ranges.back();
+    }
+  }
+
+  uint64_t get_total_origin_chunk_size() const {
+    return total_origin_chunk_size;
+  }
+
+};
+typedef ceph::shared_ptr<CompactInfo> CompactInfoRef;
+
+bool is_cinfo_key_string(const string &key);
+const string &get_cinfo_key();
+
 }
 WRITE_CLASS_ENCODER(ECUtil::HashInfo)
+WRITE_CLASS_ENCODER(ECUtil::CompactInfo)
 #endif

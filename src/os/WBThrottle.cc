@@ -6,6 +6,11 @@
 #include "os/WBThrottle.h"
 #include "common/perf_counters.h"
 
+#include "common/debug.h"
+#define dout_subsys ceph_subsys_wbthrottle
+#undef dout_prefix
+#define dout_prefix *_dout << "wbthrottle "
+
 WBThrottle::WBThrottle(CephContext *cct) :
   cur_ios(0), cur_size(0),
   cct(cct),
