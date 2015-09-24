@@ -676,6 +676,7 @@ void ECBackend::continue_recovery_op(
 	if (op.recovery_progress.first) {
 	  pop.attrset = op.xattrs;
 	}
+        op.recovered_length += pop.data.length();
 	pop.recovery_info = op.recovery_info;
 	pop.before_progress = op.recovery_progress;
 	pop.after_progress = after_progress;
@@ -700,11 +701,14 @@ void ECBackend::continue_recovery_op(
 	    if (*i != get_parent()->primary_shard()) {
 	      dout(10) << __func__ << ": on_peer_recover on " << *i
 		       << ", obj " << op.hoid << dendl;
+	      object_stat_sum_t stats;
+              stats.num_objects_recovered = 1;
+              stats.num_bytes_recovered = op.recovered_length;
 	      get_parent()->on_peer_recover(
 		*i,
 		op.hoid,
 		op.recovery_info,
-		object_stat_sum_t());
+		stats);
 	    }
 	  }
 	  get_parent()->on_global_recover(op.hoid);
@@ -814,10 +818,10 @@ bool ECBackend::handle_message(
 	     ++j) {
           ghobject_t g(i->first, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard);
           utime_t start = ceph_clock_now(NULL);
-//        FDRef fd;
-//        store->lfn_open(i->first.is_temp() ? temp_coll : coll, g, false, &fd);
-          bufferlist bl;
-          store->read(i->first.is_temp() ? temp_coll : coll, g, j->get<0>(), j->get<1>(), bl, 0, true);
+          FDRef fd;
+          store->lfn_open(i->first.is_temp() ? temp_coll : coll, g, false, &fd);
+          //bufferlist bl;
+          //store->read(i->first.is_temp() ? temp_coll : coll, g, j->get<0>(), j->get<1>(), bl, 0, true);
           dout(10) << __func__ << " preheat oid " << g << " lat " << (ceph_clock_now(NULL) - start)<< dendl;
         }
       }

@@ -188,6 +188,7 @@ private:
   struct RecoveryOp {
     hobject_t hoid;
     eversion_t v;
+    uint64_t recovered_length;
     set<pg_shard_t> missing_on;
     set<shard_id_t> missing_on_shards;
 
@@ -230,7 +231,7 @@ private:
 
     void dump(Formatter *f) const;
 
-    RecoveryOp() : pending_read(false), state(IDLE) {}
+    RecoveryOp() : pending_read(false), state(IDLE), recovered_length(0) {}
   };
   friend ostream &operator<<(ostream &lhs, const RecoveryOp &rhs);
   map<hobject_t, RecoveryOp> recovery_ops;
