@@ -232,8 +232,9 @@ protected:
    * get() should be called on pointer copy (to another thread, etc.).
    * put() should be called on destruction of some previously copied pointer.
    * put_unlock() when done with the current pointer (_most common_).
-   */  
+   */
   Mutex _lock;
+  atomic_t pg_lock_holder;  //1 for osd, 2 for other threads.
   atomic_t ref;
 
 #ifdef PG_DEBUG_REFS
@@ -246,14 +247,26 @@ protected:
 public:
   bool deleting;  // true while in removing or OSD is shutting down
 
+#define LOCKED_BY_NONE         0
+#define LOCKED_BY_OSD_THREAD   1
+#define LOCKED_BY_OTHER_THREAD 2
 
-  void lock_suspend_timeout(ThreadPool::TPHandle &handle);
-  void lock(bool no_lockdep = false);
+  void lock_suspend_timeout(ThreadPool::TPHandle &handle, int locked_by);
+  void lock(bool no_lockdep = false, int locked_by = 2);
+  bool try_pg_lock(ThreadPool::TPHandle &handle, int locked_by);
   void unlock() {
     //generic_dout(0) << this << " " << info.pgid << " unlock" << dendl;
     assert(!dirty_info);
     assert(!dirty_big_info);
+    set_pg_lock_holder(LOCKED_BY_NONE);
     _lock.Unlock();
+  }
+  int get_pg_lock_holder() {
+    return pg_lock_holder.read();
+  }
+
+  void set_pg_lock_holder(int val) {
+    pg_lock_holder.set(val);
   }
 
   void assert_locked() {
