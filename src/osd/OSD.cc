@@ -7898,7 +7898,7 @@ void OSD::do_recovery(PG *pg, ThreadPool::TPHandle &handle)
     recovery_wq.queue(pg);
     return;
   } else {
-    pg->lock_suspend_timeout(handle);
+    pg->lock_suspend_timeout(handle, 2);
     if (pg->deleting || !(pg->is_peered() && pg->is_primary())) {
       pg->unlock();
       goto out;
@@ -8297,51 +8297,55 @@ void OSD::ShardedOpWQ::_process(uint32_t thread_index, heartbeat_handle_d *hb ) 
   ThreadPool::TPHandle tp_handle(osd->cct, hb, timeout_interval, 
     suicide_interval);
 
-  (item.first)->lock_suspend_timeout(tp_handle);
+  if (!(item.first)->try_pg_lock(tp_handle, 1))
+    return;
+  
+  while(true) {
+    OpRequestRef op;
+    {
+      PG* cur_pg = &*(item.first);
+      Mutex::Locker l(sdata->sdata_op_ordering_lock);
+      if (!sdata->pg_for_processing.count(cur_pg)) {
+        (item.first)->unlock();
+        return;
+      }
+      assert(sdata->pg_for_processing[cur_pg].size());
+      op = sdata->pg_for_processing[cur_pg].front();
+      sdata->pg_for_processing[cur_pg].pop_front();
+      if (!(sdata->pg_for_processing[cur_pg].size()))
+        sdata->pg_for_processing.erase(cur_pg);
+    }  
 
-  OpRequestRef op;
-  {
-    Mutex::Locker l(sdata->sdata_op_ordering_lock);
-    if (!sdata->pg_for_processing.count(&*(item.first))) {
-      (item.first)->unlock();
-      return;
+    // osd:opwq_process marks the point at which an operation has been dequeued
+    // and will begin to be handled by a worker thread.
+    {
+#ifdef WITH_LTTNG
+      osd_reqid_t reqid = op->get_reqid();
+#endif
+      tracepoint(osd, opwq_process_start, reqid.name._type,
+          reqid.name._num, reqid.tid, reqid.inc);
     }
-    assert(sdata->pg_for_processing[&*(item.first)].size());
-    op = sdata->pg_for_processing[&*(item.first)].front();
-    sdata->pg_for_processing[&*(item.first)].pop_front();
-    if (!(sdata->pg_for_processing[&*(item.first)].size()))
-      sdata->pg_for_processing.erase(&*(item.first));
-  }  
 
-  // osd:opwq_process marks the point at which an operation has been dequeued
-  // and will begin to be handled by a worker thread.
-  {
+    lgeneric_subdout(osd->cct, osd, 30) << "dequeue status: ";
+    Formatter *f = Formatter::create("json");
+    f->open_object_section("q");
+    dump(f);
+    f->close_section();
+    f->flush(*_dout);
+    delete f;
+    *_dout << dendl;
+
+    osd->dequeue_op(item.first, op, tp_handle);
+
+    {
 #ifdef WITH_LTTNG
-    osd_reqid_t reqid = op->get_reqid();
+      osd_reqid_t reqid = op->get_reqid();
 #endif
-    tracepoint(osd, opwq_process_start, reqid.name._type,
-        reqid.name._num, reqid.tid, reqid.inc);
+      tracepoint(osd, opwq_process_finish, reqid.name._type,
+          reqid.name._num, reqid.tid, reqid.inc);
+    }
+    osd->cct->get_heartbeat_map()->reset_timeout(hb, timeout_interval, suicide_interval);
   }
-
-  lgeneric_subdout(osd->cct, osd, 30) << "dequeue status: ";
-  Formatter *f = Formatter::create("json");
-  f->open_object_section("q");
-  dump(f);
-  f->close_section();
-  f->flush(*_dout);
-  delete f;
-  *_dout << dendl;
-
-  osd->dequeue_op(item.first, op, tp_handle);
-
-  {
-#ifdef WITH_LTTNG
-    osd_reqid_t reqid = op->get_reqid();
-#endif
-    tracepoint(osd, opwq_process_finish, reqid.name._type,
-        reqid.name._num, reqid.tid, reqid.inc);
-  }
-
   (item.first)->unlock();
 }
 
@@ -8493,7 +8497,7 @@ void OSD::process_peering_events(
        ++i) {
     set<boost::intrusive_ptr<PG> > split_pgs;
     PG *pg = *i;
-    pg->lock_suspend_timeout(handle);
+    pg->lock_suspend_timeout(handle, 2);
     curmap = service.get_osdmap();
     if (pg->deleting) {
       pg->unlock();

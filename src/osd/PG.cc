@@ -229,21 +229,41 @@ PG::~PG()
 #endif
 }
 
-void PG::lock_suspend_timeout(ThreadPool::TPHandle &handle)
+void PG::lock_suspend_timeout(ThreadPool::TPHandle &handle, int locked_by)
 {
   handle.suspend_tp_timeout();
-  lock();
+  lock(false, locked_by);
   handle.reset_tp_timeout();
 }
 
-void PG::lock(bool no_lockdep)
+void PG::lock(bool no_lockdep, int locked_by)
 {
   _lock.Lock(no_lockdep);
+  set_pg_lock_holder(locked_by);
   // if we have unrecorded dirty state with the lock dropped, there is a bug
   assert(!dirty_info);
   assert(!dirty_big_info);
 
   dout(30) << "lock" << dendl;
+}
+
+bool PG::try_pg_lock(ThreadPool::TPHandle &handle, int locked_by)
+{
+  if (get_pg_lock_holder() == LOCKED_BY_OSD_THREAD)
+  {
+    return false;
+  }
+  else if (get_pg_lock_holder() == LOCKED_BY_OTHER_THREAD)
+  {
+    lock_suspend_timeout(handle, locked_by);
+    return true;
+  }
+  else 
+  {
+    lock_suspend_timeout(handle, locked_by);
+    return true;
+  }
+  
 }
 
 std::string PG::gen_prefix() const
