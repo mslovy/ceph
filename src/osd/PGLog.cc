@@ -815,7 +815,7 @@ void PGLog::_write_log(
       eversion_t().get_key_name(), dirty_to.get_key_name());
     clear_up_to(log_keys_debug, dirty_to.get_key_name());
   }
-  if (dirty_to != eversion_t::max() && dirty_from != eversion_t::max()) {
+  if (dirty_from != eversion_t::max() && dirty_to != eversion_t::max()) {
     //   dout(10) << "write_log, clearing from " << dirty_from << dendl;
     t.omap_rmkeyrange(
       coll, log_oid,
@@ -824,7 +824,7 @@ void PGLog::_write_log(
   }
 
   for (list<pg_log_entry_t>::iterator p = log.log.begin();
-       p != log.log.end() && p->version <= dirty_to;
+       p->version <= dirty_to && p != log.log.end();
        ++p) {
     bufferlist bl(sizeof(*p) * 2);
     p->encode_with_checksum(bl);
@@ -832,8 +832,8 @@ void PGLog::_write_log(
   }
 
   for (list<pg_log_entry_t>::reverse_iterator p = log.log.rbegin();
-       p != log.log.rend() &&
-	 (p->version >= dirty_from || p->version >= writeout_from) &&
+	 (p->version >= writeout_from || p->version >= dirty_from) && 
+         p != log.log.rend() &&
 	 p->version >= dirty_to;
        ++p) {
     bufferlist bl(sizeof(*p) * 2);
