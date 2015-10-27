@@ -3148,8 +3148,8 @@ void PG::update_snap_map(
   for (vector<pg_log_entry_t>::const_iterator i = log_entries.begin();
        i != log_entries.end();
        ++i) {
-    OSDriver::OSTransaction _t(osdriver.get_transaction(&t));
     if (i->soid.snap < CEPH_MAXSNAP) {
+      OSDriver::OSTransaction _t(osdriver.get_transaction(&t));
       if (i->is_delete()) {
 	int r = snap_mapper.remove_oid(
 	  i->soid,
