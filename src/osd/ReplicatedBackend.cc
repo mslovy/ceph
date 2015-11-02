@@ -600,10 +600,10 @@ void ReplicatedBackend::submit_transaction(
     &op,
     op_t);
 
-  ObjectStore::Transaction local_t;
-  local_t.set_use_tbl(op_t->get_use_tbl());
+  //ObjectStore::Transaction local_t;
+  //local_t.set_use_tbl(op_t->get_use_tbl());
   if (!(t->get_temp_added().empty())) {
-    get_temp_coll(&local_t);
+    get_temp_coll(op_t);
     add_temp_objs(t->get_temp_added());
   }
   clear_temp_objs(t->get_temp_cleared());
@@ -614,10 +614,10 @@ void ReplicatedBackend::submit_transaction(
     trim_to,
     trim_rollback_to,
     true,
-    &local_t);
+    op_t);
 
-  local_t.append(*op_t);
-  local_t.swap(*op_t);
+  //local_t.append(*op_t);
+  //local_t.swap(*op_t);
   
   op_t->register_on_applied_sync(on_local_applied_sync);
   op_t->register_on_applied(
