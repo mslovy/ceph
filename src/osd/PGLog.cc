@@ -860,7 +860,7 @@ void PGLog::_write_log(
   ::encode(log.rollback_info_trimmed_to, (*km)["rollback_info_trimmed_to"]);
 
   if (!to_remove.empty())
-    t.omap_rmkeys(coll, log_oid, to_remove);
+    t.omap_rmkeys_async(coll, log_oid, to_remove);
 }
 
 void PGLog::read_log(ObjectStore *store, coll_t pg_coll,

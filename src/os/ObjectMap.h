@@ -35,6 +35,13 @@ public:
     const SequencerPosition *spos=0     ///< [in] sequencer position
     ) = 0;
 
+  /// Set keys and values from specified map async
+  virtual int set_keys_async(
+    const ghobject_t &oid,              ///< [in] object containing map
+    const map<string, bufferlist> &set,  ///< [in] key to value map to set
+    const SequencerPosition *spos=0     ///< [in] sequencer position
+    ) = 0;
+
   /// Set header
   virtual int set_header(
     const ghobject_t &oid,              ///< [in] object containing map
@@ -56,6 +63,14 @@ public:
 
   /// Clear all map keys and values in to_clear from oid
   virtual int rm_keys(
+    const ghobject_t &oid,              ///< [in] object containing map
+    const set<string> &to_clear,        ///< [in] Keys to clear
+    const SequencerPosition *spos=0     ///< [in] sequencer position
+    ) = 0;
+
+
+  /// Clear all map keys and values in to_clear from oid async
+  virtual int rm_keys_async(
     const ghobject_t &oid,              ///< [in] object containing map
     const set<string> &to_clear,        ///< [in] Keys to clear
     const SequencerPosition *spos=0     ///< [in] sequencer position

@@ -662,9 +662,11 @@ private:
 		  const SequencerPosition &spos);
   int _omap_setkeys(coll_t cid, const ghobject_t &oid,
 		    const map<string, bufferlist> &aset,
-		    const SequencerPosition &spos);
+		    const SequencerPosition &spos,
+		    bool can_async = false);
   int _omap_rmkeys(coll_t cid, const ghobject_t &oid, const set<string> &keys,
-		   const SequencerPosition &spos);
+		   const SequencerPosition &spos,
+		   bool can_async = false);
   int _omap_rmkeyrange(coll_t cid, const ghobject_t &oid,
 		       const string& first, const string& last,
 		       const SequencerPosition &spos);

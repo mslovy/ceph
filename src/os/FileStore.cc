@@ -1562,6 +1562,7 @@ int FileStore::mount()
 
   if (!(generic_flags & SKIP_JOURNAL_REPLAY)) {
     ret = journal_replay(initial_op_seq);
+    object_map->sync();
     if (ret < 0) {
       derr << "mount failed to open journal " << journalpath << ": " << cpp_strerror(ret) << dendl;
       if (ret == -ENOTTY) {
@@ -2607,6 +2608,17 @@ unsigned FileStore::_do_transaction(
         tracepoint(objectstore, omap_setkeys_exit, r);
       }
       break;
+    case Transaction::OP_OMAP_SETKEYS_ASYNC:
+      {
+        coll_t cid = i.get_cid(op->cid);
+        ghobject_t oid = i.get_oid(op->oid);
+        map<string, bufferlist> aset;
+        i.decode_attrset(aset);
+        tracepoint(objectstore, omap_setkeys_enter, osr_name);
+        r = _omap_setkeys(cid, oid, aset, spos, true);
+        tracepoint(objectstore, omap_setkeys_exit, r);
+      }
+      break;
     case Transaction::OP_OMAP_RMKEYS:
       {
         coll_t cid = i.get_cid(op->cid);
@@ -2615,6 +2627,17 @@ unsigned FileStore::_do_transaction(
         i.decode_keyset(keys);
         tracepoint(objectstore, omap_rmkeys_enter, osr_name);
         r = _omap_rmkeys(cid, oid, keys, spos);
+        tracepoint(objectstore, omap_rmkeys_exit, r);
+      }
+      break;
+    case Transaction::OP_OMAP_RMKEYS_ASYNC:
+      {
+        coll_t cid = i.get_cid(op->cid);
+        ghobject_t oid = i.get_oid(op->oid);
+        set<string> keys;
+        i.decode_keyset(keys);
+        tracepoint(objectstore, omap_rmkeys_enter, osr_name);
+        r = _omap_rmkeys(cid, oid, keys, spos, true);
         tracepoint(objectstore, omap_rmkeys_exit, r);
       }
       break;
@@ -5001,7 +5024,8 @@ int FileStore::_omap_clear(coll_t cid, const ghobject_t &hoid,
 
 int FileStore::_omap_setkeys(coll_t cid, const ghobject_t &hoid,
 			     const map<string, bufferlist> &aset,
-			     const SequencerPosition &spos) {
+			     const SequencerPosition &spos,
+			     bool can_async) {
   dout(15) << __func__ << " " << cid << "/" << hoid << dendl;
   Index index;
   int r = get_index(cid, &index);
@@ -5018,15 +5042,19 @@ int FileStore::_omap_setkeys(coll_t cid, const ghobject_t &hoid,
       return r;
     }
   }
-  r = object_map->set_keys(hoid, aset, &spos);
-  dout(20) << __func__ << " " << cid << "/" << hoid << " = " << r << dendl;
+  if (can_async)
+    r = object_map->set_keys_async(hoid, aset, &spos);
+  else
+    r = object_map->set_keys(hoid, aset, &spos);
+  dout(20) << __func__ << " " << cid << "/" << hoid << "(async:" << can_async <<") = " << r << dendl;
   return r;
 }
 
 int FileStore::_omap_rmkeys(coll_t cid, const ghobject_t &hoid,
 			    const set<string> &keys,
-			    const SequencerPosition &spos) {
-  dout(15) << __func__ << " " << cid << "/" << hoid << dendl;
+			    const SequencerPosition &spos,
+			    bool can_async) {
+  dout(15) << __func__ << " " << cid << "/" << hoid << "(async:" << can_async << ")" << dendl;
   Index index;
   int r = get_index(cid, &index);
   if (r < 0)
@@ -5038,7 +5066,10 @@ int FileStore::_omap_rmkeys(coll_t cid, const ghobject_t &hoid,
     if (r < 0)
       return r;
   }
-  r = object_map->rm_keys(hoid, keys, &spos);
+  if (can_async)
+    r = object_map->rm_keys_async(hoid, keys, &spos);
+  else
+    r = object_map->rm_keys(hoid, keys, &spos);
   if (r < 0 && r != -ENOENT)
     return r;
   return 0;

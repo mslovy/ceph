@@ -64,6 +64,9 @@ public:
   Cond header_cond;
   Cond map_header_cond;
 
+  Mutex transaction_lock;
+  Mutex submit_lock;
+  KeyValueDB::Transaction shared_transaction_buffer;
   /**
    * Set of headers currently in use
    */
@@ -114,15 +117,26 @@ public:
   };
 
   DBObjectMap(KeyValueDB *db) : db(db), header_lock("DBOBjectMap"),
+                                transaction_lock("DBObjectMap::TransactionLock"),
+                                submit_lock("DBObjectMap::SubmitLock"),
                                 cache_lock("DBObjectMap::CacheLock"),
                                 caches(g_conf->filestore_omap_header_cache_size)
-    {}
+    {
+      shared_transaction_buffer =db->get_transaction();
+    }
 
   int set_keys(
     const ghobject_t &oid,
     const map<string, bufferlist> &set,
     const SequencerPosition *spos=0
     );
+
+
+  int set_keys_async(
+    const ghobject_t &oid,
+    const map<string, bufferlist> &set,
+    const SequencerPosition *spos=0
+    );  
 
   int set_header(
     const ghobject_t &oid,
@@ -150,6 +164,13 @@ public:
     const set<string> &to_clear,
     const SequencerPosition *spos=0
     );
+
+
+  int rm_keys_async(
+    const ghobject_t &oid,
+    const set<string> &to_clear,
+    const SequencerPosition *spos=0
+    ); 
 
   int get(
     const ghobject_t &oid,

@@ -380,6 +380,8 @@ public:
 
       OP_SETALLOCHINT = 39,  // cid, oid, object_size, write_size
       OP_COLL_HINT = 40, // cid, type, bl
+      OP_OMAP_SETKEYS_ASYNC = 41, // cid, attrset
+      OP_OMAP_RMKEYS_ASYNC = 42, // cid, keyset
     };
 
     // Transaction hint type
@@ -1401,6 +1403,27 @@ public:
       }
       data.ops++;
     }
+    /// Set keys on oid omap async, which can just be used on non-readable key-value pairs during transaction
+    void omap_setkeys_async(
+      coll_t cid,                           ///< [in] Collection containing oid
+      const ghobject_t &oid,                ///< [in] Object to update
+      const map<string, bufferlist> &attrset ///< [in] Replacement keys and values
+      ) {
+      if (use_tbl) {
+        __u32 op = OP_OMAP_SETKEYS_ASYNC;
+        ::encode(op, tbl);
+        ::encode(cid, tbl);
+        ::encode(oid, tbl);
+        ::encode(attrset, tbl);
+      } else {
+        Op* _op = _get_next_op();
+        _op->op = OP_OMAP_SETKEYS_ASYNC;
+        _op->cid = _get_coll_id(cid);
+        _op->oid = _get_object_id(oid);
+        ::encode(attrset, data_bl);
+      }
+      data.ops++;
+    }
     /// Remove keys from oid omap
     void omap_rmkeys(
       coll_t cid,             ///< [in] Collection containing oid
@@ -1416,6 +1439,28 @@ public:
       } else {
         Op* _op = _get_next_op();
         _op->op = OP_OMAP_RMKEYS;
+        _op->cid = _get_coll_id(cid);
+        _op->oid = _get_object_id(oid);
+        ::encode(keys, data_bl);
+      }
+      data.ops++;
+    }
+
+    /// Remove keys from oid omap async
+    void omap_rmkeys_async(
+      coll_t cid,             ///< [in] Collection containing oid
+      const ghobject_t &oid,  ///< [in] Object from which to remove the omap
+      const set<string> &keys ///< [in] Keys to clear
+      ) {
+      if (use_tbl) {
+        __u32 op = OP_OMAP_RMKEYS_ASYNC;
+        ::encode(op, tbl);
+        ::encode(cid, tbl);
+        ::encode(oid, tbl);
+        ::encode(keys, tbl);
+      } else {
+        Op* _op = _get_next_op();
+        _op->op = OP_OMAP_RMKEYS_ASYNC;
         _op->cid = _get_coll_id(cid);
         _op->oid = _get_object_id(oid);
         ::encode(keys, data_bl);

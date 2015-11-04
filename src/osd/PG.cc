@@ -2907,7 +2907,7 @@ void PG::write_if_dirty(ObjectStore::Transaction& t)
     prepare_write_info(&km);
   pg_log.write_log(t, &km, coll, pgmeta_oid);
   if (!km.empty())
-    t.omap_setkeys(coll, pgmeta_oid, km);
+    t.omap_setkeys_async(coll, pgmeta_oid, km);
 }
 
 void PG::trim_peers()

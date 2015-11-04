@@ -455,6 +455,27 @@ int DBObjectMap::set_keys(const ghobject_t &oid,
   return db->submit_transaction(t);
 }
 
+int DBObjectMap::set_keys_async(const ghobject_t &oid,
+                          const map<string, bufferlist> &set,
+                          const SequencerPosition *spos)
+{
+  KeyValueDB::Transaction t = db->get_transaction();
+  MapHeaderLock hl(this, oid);
+  Header header = lookup_create_map_header(hl, oid, t);
+  if (!header)
+    return -EINVAL;
+  if (check_spos(oid, header, spos))
+    return 0;
+  int ret = db->submit_transaction(t);
+  if (ret)
+    return ret; 
+  {
+    Mutex::Locker l(transaction_lock);
+    shared_transaction_buffer->set(user_prefix(header), set);
+  }
+  return 0;
+}
+
 int DBObjectMap::set_header(const ghobject_t &oid,
 			    const bufferlist &bl,
 			    const SequencerPosition *spos)
@@ -707,6 +728,26 @@ int DBObjectMap::rm_keys(const ghobject_t &oid,
     t->rmkeys_by_prefix(complete_prefix(header));
   }
   return db->submit_transaction(t);
+}
+
+
+int DBObjectMap::rm_keys_async(const ghobject_t &oid,
+                         const set<string> &to_clear,
+                         const SequencerPosition *spos)
+{
+  MapHeaderLock hl(this, oid);
+  Header header = lookup_map_header(hl, oid);
+  if (!header)
+    return -ENOENT;
+  assert(!header->parent);
+  KeyValueDB::Transaction t = db->get_transaction();
+  if (check_spos(oid, header, spos))
+    return 0;
+  {
+    Mutex::Locker l(transaction_lock);
+    shared_transaction_buffer->rmkeys(user_prefix(header), to_clear);
+  }
+  return 0;
 }
 
 int DBObjectMap::clear_keys_header(const ghobject_t &oid,
@@ -1047,8 +1088,16 @@ int DBObjectMap::sync(const ghobject_t *oid,
     write_state(t);
     return db->submit_transaction_sync(t);
   } else {
-    Mutex::Locker l(header_lock);
-    write_state(t);
+    {
+      Mutex::Locker l(header_lock);
+      write_state(t);
+    }
+    {
+      Mutex::Locker l(transaction_lock);
+      t = shared_transaction_buffer;
+      shared_transaction_buffer = db->get_transaction();
+    }
+    Mutex::Locker l(submit_lock);
     return db->submit_transaction_sync(t);
   }
 }
