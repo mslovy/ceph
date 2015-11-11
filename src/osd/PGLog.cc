@@ -741,7 +741,8 @@ void PGLog::check() {
 void PGLog::write_log(
   ObjectStore::Transaction& t,
   map<string,bufferlist> *km,
-  const coll_t& coll, const ghobject_t &log_oid)
+  const coll_t& coll, const ghobject_t &log_oid,
+  bool require_rollback)
 {
   if (is_dirty()) {
     dout(10) << "write_log with: "
@@ -759,7 +760,8 @@ void PGLog::write_log(
       trimmed,
       dirty_divergent_priors,
       !touched_log,
-      (pg_log_debug ? &log_keys_debug : 0));
+      (pg_log_debug ? &log_keys_debug : 0),
+      require_rollback);
     undirty();
   } else {
     dout(10) << "log is not dirty" << dendl;
@@ -777,7 +779,7 @@ void PGLog::write_log(
     t, km, log, coll, log_oid,
     divergent_priors, eversion_t::max(), eversion_t(), eversion_t(),
     set<eversion_t>(),
-    true, true, 0);
+    true, true, 0, true);
 }
 
 void PGLog::_write_log(

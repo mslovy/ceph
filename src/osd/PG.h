@@ -2025,6 +2025,7 @@ public:
   PG& operator=(const PG& rhs);
   const spg_t pg_id;
   uint64_t peer_features;
+  epoch_t last_epoch;
 
  public:
   const spg_t&      get_pgid() const { return pg_id; }
@@ -2132,7 +2133,8 @@ public:
     pg_info_t &info, coll_t coll,
     map<epoch_t,pg_interval_t> &past_intervals,
     ghobject_t &pgmeta_oid,
-    bool dirty_big_info);
+    bool dirty_big_info,
+    bool dirty_epoch);
   void write_if_dirty(ObjectStore::Transaction& t);
 
   eversion_t get_next_version() const {
