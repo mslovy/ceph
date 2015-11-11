@@ -38,7 +38,7 @@ public:
   /// Set keys and values from specified map async
   virtual int set_keys_async(
     const ghobject_t &oid,              ///< [in] object containing map
-    const map<string, bufferlist> &set,  ///< [in] key to value map to set
+    map<string, bufferlist> &set,  ///< [in] key to value map to set
     const SequencerPosition *spos=0     ///< [in] sequencer position
     ) = 0;
 

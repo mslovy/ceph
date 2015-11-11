@@ -823,12 +823,13 @@ void PGLog::_write_log(
     clear_after(log_keys_debug, dirty_from.get_key_name());
   }
 
+  map<string,bufferlist> keys;
   for (list<pg_log_entry_t>::iterator p = log.log.begin();
        p->version <= dirty_to && p != log.log.end();
        ++p) {
     bufferlist bl(sizeof(*p) * 2);
     p->encode_with_checksum(bl);
-    (*km)[p->get_key_name()].claim(bl);
+    keys[p->get_key_name()].claim(bl);
   }
 
   for (list<pg_log_entry_t>::reverse_iterator p = log.log.rbegin();
@@ -838,19 +839,20 @@ void PGLog::_write_log(
        ++p) {
     bufferlist bl(sizeof(*p) * 2);
     p->encode_with_checksum(bl);
-    (*km)[p->get_key_name()].claim(bl);
+    keys[p->get_key_name()].claim(bl);
   }
-
+  
   if (log_keys_debug) {
-    for (map<string, bufferlist>::iterator i = (*km).begin();
-	 i != (*km).end();
+    for (map<string, bufferlist>::iterator i = keys.begin();
+	 i != keys.end();
 	 ++i) {
-      if (i->first[0] == '_')
-	continue;
+      //if (i->first[0] == '_')
+	//continue;
       assert(!log_keys_debug->count(i->first));
       log_keys_debug->insert(i->first);
     }
   }
+  t.omap_setkeys(coll, log_oid, keys);
 
   if (dirty_divergent_priors) {
     //dout(10) << "write_log: writing divergent_priors" << dendl;
@@ -860,7 +862,7 @@ void PGLog::_write_log(
   ::encode(log.rollback_info_trimmed_to, (*km)["rollback_info_trimmed_to"]);
 
   if (!to_remove.empty())
-    t.omap_rmkeys_async(coll, log_oid, to_remove);
+    t.omap_rmkeys(coll, log_oid, to_remove);
 }
 
 void PGLog::read_log(ObjectStore *store, coll_t pg_coll,

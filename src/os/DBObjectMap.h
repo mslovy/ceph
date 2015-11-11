@@ -65,8 +65,11 @@ public:
   Cond map_header_cond;
 
   Mutex transaction_lock;
-  Mutex submit_lock;
+  //Mutex submit_lock;
+  //static int const max_transaction_num = 100;
+  //int current_transaction_num;
   KeyValueDB::Transaction shared_transaction_buffer;
+  ceph::unordered_map<string, map<string, bufferlist> > shared_transaction_map;
   /**
    * Set of headers currently in use
    */
@@ -118,7 +121,8 @@ public:
 
   DBObjectMap(KeyValueDB *db) : db(db), header_lock("DBOBjectMap"),
                                 transaction_lock("DBObjectMap::TransactionLock"),
-                                submit_lock("DBObjectMap::SubmitLock"),
+                                //submit_lock("DBObjectMap::SubmitLock"),
+                                //current_transaction_num(0),
                                 cache_lock("DBObjectMap::CacheLock"),
                                 caches(g_conf->filestore_omap_header_cache_size)
     {
@@ -134,7 +138,7 @@ public:
 
   int set_keys_async(
     const ghobject_t &oid,
-    const map<string, bufferlist> &set,
+    map<string, bufferlist> &set,
     const SequencerPosition *spos=0
     );  
 

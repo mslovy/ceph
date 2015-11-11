@@ -2615,7 +2615,7 @@ unsigned FileStore::_do_transaction(
         map<string, bufferlist> aset;
         i.decode_attrset(aset);
         tracepoint(objectstore, omap_setkeys_enter, osr_name);
-        r = _omap_setkeys(cid, oid, aset, spos, true);
+        r = _omap_setkeys_async(cid, oid, aset, spos);
         tracepoint(objectstore, omap_setkeys_exit, r);
       }
       break;
@@ -5022,10 +5022,11 @@ int FileStore::_omap_clear(coll_t cid, const ghobject_t &hoid,
   return 0;
 }
 
-int FileStore::_omap_setkeys(coll_t cid, const ghobject_t &hoid,
-			     const map<string, bufferlist> &aset,
-			     const SequencerPosition &spos,
-			     bool can_async) {
+int FileStore::_omap_setkeys_async(coll_t cid, const ghobject_t &hoid,
+			     map<string, bufferlist> &aset,
+			     const SequencerPosition &spos
+			    // bool can_async
+                            ) {
   dout(15) << __func__ << " " << cid << "/" << hoid << dendl;
   Index index;
   int r = get_index(cid, &index);
@@ -5042,11 +5043,38 @@ int FileStore::_omap_setkeys(coll_t cid, const ghobject_t &hoid,
       return r;
     }
   }
-  if (can_async)
-    r = object_map->set_keys_async(hoid, aset, &spos);
-  else
-    r = object_map->set_keys(hoid, aset, &spos);
-  dout(20) << __func__ << " " << cid << "/" << hoid << "(async:" << can_async <<") = " << r << dendl;
+  //if (can_async)
+  //  r = object_map->set_keys_async(hoid, aset, &spos);
+  //else
+  r = object_map->set_keys_async(hoid, aset, &spos);
+  //dout(20) << __func__ << " " << cid << "/" << hoid << "(async:" << can_async <<") = " << r << dendl;
+  dout(20) << __func__ << " " << cid << "/" << hoid << " = " << r << dendl;
+  return r;
+}
+
+int FileStore::_omap_setkeys(coll_t cid, const ghobject_t &hoid,
+                             const map<string, bufferlist> &aset,
+                             const SequencerPosition &spos
+                             ) {
+  dout(15) << __func__ << " " << cid << "/" << hoid << dendl;
+  Index index;
+  int r = get_index(cid, &index);
+  if (r < 0) { 
+    dout(20) << __func__ << " get_index got " << cpp_strerror(r) << dendl;
+    return r;
+  }
+  {
+    assert(NULL != index.index);
+    RWLock::RLocker l((index.index)->access_lock);
+    r = lfn_find(hoid, index);
+    if (r < 0) { 
+      dout(20) << __func__ << " lfn_find got " << cpp_strerror(r) << dendl;
+      return r;
+    }    
+  }
+  r = object_map->set_keys(hoid, aset, &spos);
+  //dout(20) << __func__ << " " << cid << "/" << hoid << "(async:" << can_async <<") = " << r << dendl;
+  dout(20) << __func__ << " " << cid << "/" << hoid << " = " << r << dendl;
   return r;
 }
 

@@ -456,7 +456,7 @@ int DBObjectMap::set_keys(const ghobject_t &oid,
 }
 
 int DBObjectMap::set_keys_async(const ghobject_t &oid,
-                          const map<string, bufferlist> &set,
+                          map<string, bufferlist> &set,
                           const SequencerPosition *spos)
 {
   KeyValueDB::Transaction t = db->get_transaction();
@@ -471,7 +471,29 @@ int DBObjectMap::set_keys_async(const ghobject_t &oid,
     return ret; 
   {
     Mutex::Locker l(transaction_lock);
-    shared_transaction_buffer->set(user_prefix(header), set);
+    shared_transaction_map[user_prefix(header)].swap(set);
+    /*
+    for (std::map<string, bufferlist>::const_iterator it = set.begin(); it != set.end(); ++it) {
+      if (it->first == "_info" ||
+          it->first == "_epoch" ||
+          it->first == "can_rollback_to" ||
+          it->first == "rollback_info_trimmed_to" ||
+          it->first == "_big_info" ||
+          it->first == "infover") {
+        shared_transaction_map[user_prefix(header)][it->first] = it->second;
+      } else {
+        if (current_transaction_num++ > max_transaction_num)
+        {
+          KeyValueDB::Transaction t = shared_traddnsaction_buffer;
+          shared_traddnsaction_buffer = db->get_transaction();
+          db->submit_transaction(t);
+          current_transaction_num = 0;
+        } else {
+          shared_traddnsaction_buffer->set(user_prefix(header), set);
+        }
+      }
+    }
+    */
   }
   return 0;
 }
@@ -1087,17 +1109,18 @@ int DBObjectMap::sync(const ghobject_t *oid,
     Mutex::Locker l(header_lock);
     write_state(t);
     return db->submit_transaction_sync(t);
-  } else {
-    {
-      Mutex::Locker l(header_lock);
-      write_state(t);
-    }
+  } else { 
+    ceph::unordered_map<string, map<string, bufferlist> > stm;
     {
       Mutex::Locker l(transaction_lock);
+      /*
       t = shared_transaction_buffer;
       shared_transaction_buffer = db->get_transaction();
+      */
+      stm.swap(shared_transaction_map);
     }
-    Mutex::Locker l(submit_lock);
+    for (ceph::unordered_map<string, map<string, bufferlist> >::iterator it = stm.begin(); it != stm.end(); ++it) 
+      t->set(it->first, it->second);
     return db->submit_transaction_sync(t);
   }
 }
