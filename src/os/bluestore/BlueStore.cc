@@ -2528,8 +2528,10 @@ int BlueStore::fiemap(
       continue;
     }
     // we are seeing a hole, time to add an entry to fiemap.
-    m[start] = offset - start;
-    dout(20) << __func__ << " out " << start << "~" << m[start] << dendl;
+    if (offset - start != 0) {
+      m[start] = offset - start;
+      dout(20) << __func__ << " out " << start << "~" << m[start] << dendl;
+    }
     offset += x_len;
     start = offset;
     len -= x_len;
