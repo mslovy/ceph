@@ -26,6 +26,7 @@
 #include "common/Mutex.h"
 #include "common/Cond.h"
 #include "common/errno.h"
+#include "include/encoding.h"
 #include "include/stringify.h"
 #include <boost/scoped_ptr.hpp>
 #include <boost/random/mersenne_twister.hpp>
@@ -2546,6 +2547,45 @@ TEST_P(StoreTest, SetAllocHint) {
     t.remove_collection(cid);
     r = store->apply_transaction(&osr, t);
     ASSERT_EQ(r, 0);
+  }
+}
+
+TEST_P(StoreTest, Fiemap) {
+  ObjectStore::Sequencer osr("test");
+  coll_t cid;
+  ghobject_t hoid(hobject_t("test_fiemap", "", CEPH_NOSNAP, 0, 0, ""));
+  map<uint64_t, uint64_t> m;
+  m[8192] = 4096;
+  m[16384] = 4096;
+  m[32768] = 4096;
+  bufferlist bl;
+  bufferptr bp(4096);
+  bp.zero();
+  bl.append(bp);
+  int r;
+  {
+    ObjectStore::Transaction t;
+    t.create_collection(cid, 0);
+    t.touch(cid, hoid);
+    r = store->apply_transaction(&osr, t);
+    ASSERT_EQ(r, 0);
+  }
+  {
+    ObjectStore::Transaction t;
+    for (map<uint64_t, uint64_t>::iterator it = m.begin(); it != m.end(); ++it)
+      t.write(cid, hoid, it->first, it->second, bl, 0);
+    r = store->apply_transaction(&osr, t);
+    ASSERT_EQ(r, 0);
+  }
+  {
+    ObjectStore::Transaction t;
+    bufferlist tempbl;
+    r = store->fiemap(cid, hoid, 0, 4096*1024*1024, tempbl);
+    ASSERT_EQ(r, 0); 
+    bufferlist::iterator iter = tempbl.begin();
+    map<uint64_t, uint64_t> temp_m;
+    ::decode(temp_m, iter);
+    ASSERT_EQ(m, temp_m); 
   }
 }
 
