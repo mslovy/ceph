@@ -325,13 +325,15 @@ int MemStore::fiemap(coll_t cid, const ghobject_t& oid,
   ObjectRef o = c->get_object(oid);
   if (!o)
     return -ENOENT;
+  size_t l;
+  map<uint64_t, uint64_t> m;
   if (offset >= o->get_size())
-    return 0;
-  size_t l = len;
+    goto out;
+  l = len;
   if (offset + l > o->get_size())
     l = o->get_size() - offset;
-  map<uint64_t, uint64_t> m;
   m[offset] = l;
+out:
   ::encode(m, bl);
   return 0;
 }
