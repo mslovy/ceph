@@ -76,6 +76,7 @@
 #define CEPH_FEATURE_CRUSH_TUNABLES5	(1ULL<<58) /* chooseleaf stable mode */
 // duplicated since it was introduced at the same time as CEPH_FEATURE_CRUSH_TUNABLES5
 #define CEPH_FEATURE_NEW_OSDOPREPLY_ENCODING   (1ULL<<58) /* New, v7 encoding */
+#define CEPH_OSD_PARTIAL_RECOVERY  (1ULL<<59) /* recover partial extents for objects */
 
 #define CEPH_FEATURE_RESERVED2 (1ULL<<61)  /* slow down, we are almost out... */
 #define CEPH_FEATURE_RESERVED  (1ULL<<62)  /* DO NOT USE THIS ... last bit! */
@@ -172,6 +173,7 @@ static inline unsigned long long ceph_sanitize_features(unsigned long long f) {
 	 CEPH_FEATURE_MON_STATEFUL_SUB |	 \
 	 CEPH_FEATURE_MON_ROUTE_OSDMAP |	 \
 	 CEPH_FEATURE_CRUSH_TUNABLES5 |	    \
+	 CEPH_OSD_PARTIAL_RECOVERY |	 \
 	 0ULL)
 
 #define CEPH_FEATURES_SUPPORTED_DEFAULT  CEPH_FEATURES_ALL
