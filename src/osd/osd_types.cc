@@ -3385,7 +3385,7 @@ void pg_log_entry_t::decode_with_checksum(bufferlist::iterator& p)
 
 void pg_log_entry_t::encode(bufferlist &bl) const
 {
-  ENCODE_START(10, 4, bl);
+  ENCODE_START(11, 4, bl);
   ::encode(op, bl);
   ::encode(soid, bl);
   ::encode(version, bl);
@@ -3410,12 +3410,14 @@ void pg_log_entry_t::encode(bufferlist &bl) const
   ::encode(user_version, bl);
   ::encode(mod_desc, bl);
   ::encode(extra_reqids, bl);
+  ::encode(can_recover_partial, bl);
+  ::encode(dirty_data_interval, bl);
   ENCODE_FINISH(bl);
 }
 
 void pg_log_entry_t::decode(bufferlist::iterator &bl)
 {
-  DECODE_START_LEGACY_COMPAT_LEN(10, 4, 4, bl);
+  DECODE_START_LEGACY_COMPAT_LEN(11, 4, 4, bl);
   ::decode(op, bl);
   if (struct_v < 2) {
     sobject_t old_soid;
@@ -3464,6 +3466,12 @@ void pg_log_entry_t::decode(bufferlist::iterator &bl)
     mod_desc.mark_unrollbackable();
   if (struct_v >= 10)
     ::decode(extra_reqids, bl);
+  if (struct_v >= 11) {
+    ::decode(can_recover_partial, bl);
+    ::decode(dirty_data_internal, bl);
+  } else {
+    can_recover_partial = false;
+  }
 
   DECODE_FINISH(bl);
 }
