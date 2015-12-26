@@ -2507,16 +2507,18 @@ struct pg_log_entry_t {
   __s32      op;
   bool invalid_hash; // only when decoding sobject_t based entries
   bool invalid_pool; // only when decoding pool-less hobject based entries
+  bool can_recover_partial; // do partial recovery only if a single overwrite
+  interval_set<uint64_t>  dirty_extents; // describes the modified extents for a object
 
   pg_log_entry_t()
    : user_version(0), op(0),
-     invalid_hash(false), invalid_pool(false) {}
+     invalid_hash(false), invalid_pool(false), can_recover_partial(false) {}
   pg_log_entry_t(int _op, const hobject_t& _soid,
                 const eversion_t& v, const eversion_t& pv,
                 version_t uv,
                 const osd_reqid_t& rid, const utime_t& mt)
    : soid(_soid), reqid(rid), version(v), prior_version(pv), user_version(uv),
-     mtime(mt), op(_op), invalid_hash(false), invalid_pool(false)
+     mtime(mt), op(_op), invalid_hash(false), invalid_pool(false), can_recover_partial(false)
      {}
       
   bool is_clone() const { return op == CLONE; }
