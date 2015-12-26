@@ -2570,17 +2570,22 @@ struct pg_log_entry_t {
   __s32      op;
   bool invalid_hash; // only when decoding sobject_t based entries
   bool invalid_pool; // only when decoding pool-less hobject based entries
+  bool unmodified_omap;
+  interval_set<uint64_t>  unmodified_extents; // describes the modified extents for a object
 
   pg_log_entry_t()
    : user_version(0), op(0),
-     invalid_hash(false), invalid_pool(false) {}
+     invalid_hash(false), invalid_pool(false), unmodified_omap(true) {
+    unmodified_extents.insert(0, (uint64_t) - 1);
+  }
   pg_log_entry_t(int _op, const hobject_t& _soid,
                 const eversion_t& v, const eversion_t& pv,
                 version_t uv,
                 const osd_reqid_t& rid, const utime_t& mt)
    : soid(_soid), reqid(rid), version(v), prior_version(pv), user_version(uv),
-     mtime(mt), op(_op), invalid_hash(false), invalid_pool(false)
-     {}
+     mtime(mt), op(_op), invalid_hash(false), invalid_pool(false), unmodified_omap(true) {
+    unmodified_extents.insert(0, (uint64_t) - 1);
+  }
       
   bool is_clone() const { return op == CLONE; }
   bool is_modify() const { return op == MODIFY; }
@@ -2717,11 +2722,11 @@ inline ostream& operator<<(ostream& out, const pg_log_t& log)
  *  also used to pass missing info in messages.
  */
 struct pg_missing_t {
-  struct item {
+  struct old_item {
     eversion_t need, have;
-    item() {}
-    explicit item(eversion_t n) : need(n) {}  // have no old version
-    item(eversion_t n, eversion_t h) : need(n), have(h) {}
+    old_item() {}
+    explicit old_item(eversion_t n) : need(n) {}  // have no old version
+    old_item(eversion_t n, eversion_t h) : need(n), have(h) {}
 
     void encode(bufferlist& bl) const {
       ::encode(need, bl);
@@ -2731,15 +2736,49 @@ struct pg_missing_t {
       ::decode(need, bl);
       ::decode(have, bl);
     }
+  };
+  WRITE_CLASS_ENCODER(old_item)
+
+  struct item {
+    eversion_t need, have;
+    bool unmodified_omap;
+    interval_set<uint64_t> unmodified_extents;
+    item() : unmodified_omap(false) {}
+    explicit item(eversion_t n) : need(n), unmodified_omap(false) {}  // have no old version
+    item(eversion_t n, eversion_t h) : need(n), have(h), unmodified_omap(false) {}
+    item(const pg_log_entry_t& e) : need(e.version), have(e.prior_version), unmodified_omap(e.unmodified_omap) {
+      unmodified_extents.insert(e.unmodified_extents);
+    }
+
+    void update(const pg_log_entry_t& e) {
+      unmodified_omap = (unmodified_omap && e.unmodified_omap);
+      unmodified_extents.intersection_of(e.unmodified_extents);
+    }
+    void encode(bufferlist& bl) const {
+      ::encode(need, bl);
+      ::encode(have, bl);
+      ::encode(unmodified_omap, bl);
+      ::encode(unmodified_extents, bl);
+    }
+    void decode(bufferlist::iterator& bl) {
+      ::decode(need, bl);
+      ::decode(have, bl);
+      ::decode(unmodified_omap, bl);
+      ::decode(unmodified_extents, bl);
+    }
     void dump(Formatter *f) const {
       f->dump_stream("need") << need;
       f->dump_stream("have") << have;
+      f->dump_stream("unmodified_omap") << unmodified_omap;
+      f->dump_stream("unmodified_extents") << unmodified_extents;
     }
     static void generate_test_instances(list<item*>& o) {
       o.push_back(new item);
       o.push_back(new item);
       o.back()->need = eversion_t(1, 2);
       o.back()->have = eversion_t(1, 1);
+      o.back()->unmodified_omap = false;
+      o.back()->unmodified_extents.insert(0, 4096);
     }
   }; 
   WRITE_CLASS_ENCODER(item)
@@ -2770,13 +2809,14 @@ struct pg_missing_t {
 
   void resort(bool sort_bitwise);
 
-  void encode(bufferlist &bl) const;
+  void encode(bufferlist &bl, uint64_t features) const;
   void decode(bufferlist::iterator &bl, int64_t pool = -1);
   void dump(Formatter *f) const;
   static void generate_test_instances(list<pg_missing_t*>& o);
 };
 WRITE_CLASS_ENCODER(pg_missing_t::item)
-WRITE_CLASS_ENCODER(pg_missing_t)
+WRITE_CLASS_ENCODER(pg_missing_t::old_item)
+WRITE_CLASS_ENCODER_FEATURES(pg_missing_t)
 
 ostream& operator<<(ostream& out, const pg_missing_t::item& i);
 ostream& operator<<(ostream& out, const pg_missing_t& missing);
