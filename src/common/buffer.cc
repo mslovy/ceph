@@ -717,7 +717,36 @@ static simple_spinlock_t buffer_debug_lock = SIMPLE_SPINLOCK_INITIALIZER;
     _raw->nref.inc();
     bdout << "ptr " << this << " get " << _raw << bendl;
   }
-  buffer::ptr& buffer::ptr::operator= (const ptr& p)
+  buffer::c_ptr& buffer::c_ptr::operator= (const ptr& p)
+  {
+    if (p.is_partial())
+    {
+      release();
+      if ((p.length() & ~CEPH_PAGE_MASK) == 0)
+        _raw = buffer::create_page_aligned(_len);
+      else
+        _raw = buffer::create(_len);
+      _off = 0;
+      _len = p.length();
+      p.copy_out(p.offset(), p.length(), _raw->data);
+    } else {
+      if (p._raw) {
+        p._raw->nref.inc();
+        bdout << "ptr " << this << " get " << _raw << bendl;
+      }
+      buffer::raw *raw = p._raw; 
+      release();
+      if (raw) {
+        _raw = raw;
+        _off = p._off;
+        _len = p._len;
+      } else {
+        _off = _len = 0;
+      }
+    }
+    return *this;
+  }
+  buffer::c_ptr& buffer::c_ptr::operator= (const c_ptr& p)
   {
     if (p._raw) {
       p._raw->nref.inc();
@@ -920,6 +949,23 @@ static simple_spinlock_t buffer_debug_lock = SIMPLE_SPINLOCK_INITIALIZER;
     return _raw->zero_copy_to_fd(fd, (loff_t*)offset);
   }
 
+  buffer::c_ptr::operator=&(const ptr& p) const
+  {
+    if (p._raw) {
+      p._raw->nref.inc();
+      bdout << "ptr " << this << " get " << _raw << bendl;
+    }
+    buffer::raw *raw = p._raw; 
+    release();
+    if (raw) {
+      _raw = raw;
+      _off = p._off;
+      _len = p._len;
+    } else {
+      _off = _len = 0;
+    }
+    return *this;
+  }
   // -- buffer::list::iterator --
   /*
   buffer::list::iterator operator=(const buffer::list::iterator& other)

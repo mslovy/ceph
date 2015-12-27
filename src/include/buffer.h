@@ -233,7 +233,10 @@ namespace buffer CEPH_BUFFER_API {
       assert(raw_length() >= l);
       _len = l;
     }
-
+    
+    bool is_partial() {
+      return offset() > 0 || end() < raw_length();
+    }
     unsigned append(char c);
     unsigned append(const char *p, unsigned l);
     void copy_in(unsigned o, unsigned l, const char *src);
@@ -245,6 +248,15 @@ namespace buffer CEPH_BUFFER_API {
 
   };
 
+
+  class CEPH_BUFFER_API c_ptr : public CEPH_BUFFER_API ptr {
+  public:
+    //c_ptr(const char *d, unsigned l);
+    //c_ptr(const ptr& p);
+    //c_ptr(const ptr& p, unsigned o, unsigned l);
+    c_ptr& operator= (const ptr& p);
+    c_ptr& operator= (const c_ptr& p);
+  };
 
   /*
    * list - the useful bit!
