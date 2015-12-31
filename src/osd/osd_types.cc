@@ -3729,17 +3729,38 @@ void pg_missing_t::resort(bool sort_bitwise)
   }
 }
 
-void pg_missing_t::encode(bufferlist &bl) const
+void pg_missing_t::encode(bufferlist &bl, uint64_t features) const
 {
-  ENCODE_START(3, 2, bl);
+  if ((features & CEPH_OSD_PARTIAL_RECOVERY) == 0) {
+    ENCODE_START(3, 2, bl);
+    map<hobject_t, old_item, hobject_t::ComparatorWithDefault> tmp;
+    for (map<hobject_t, item, hobject_t::ComparatorWithDefault>::const_iterator i = missing.begin();
+	 i != missing.end(); ++i) {
+      tmp[i->first] = old_item(i->second.need, i->second.have);
+    }
+    ::encode(tmp, bl);
+    ENCODE_FINISH(bl);
+    return;
+  }
+  ENCODE_START(4, 2, bl);
   ::encode(missing, bl);
   ENCODE_FINISH(bl);
 }
 
 void pg_missing_t::decode(bufferlist::iterator &bl, int64_t pool)
 {
-  DECODE_START_LEGACY_COMPAT_LEN(3, 2, 2, bl);
-  ::decode(missing, bl);
+  DECODE_START_LEGACY_COMPAT_LEN(4, 2, 2, bl);
+  if (struct_v <= 3) {
+    map<hobject_t, old_item, hobject_t::ComparatorWithDefault> tmp;
+    ::decode(tmp, bl);
+    // copy old item style to new style
+    for (map<hobject_t, old_item, hobject_t::ComparatorWithDefault>::iterator i = tmp.begin();
+	 i != tmp.end(); ++i) {
+      missing[i->first] = item(i->second.need, i->second.have);
+    }
+  } else {
+    ::decode(missing, bl);
+  }
   DECODE_FINISH(bl);
 
   if (struct_v < 3) {
@@ -3796,7 +3817,6 @@ ostream& operator<<(ostream& out, const pg_missing_t::item& i)
 ostream& operator<<(ostream& out, const pg_missing_t& missing) 
 {
   out << "missing(" << missing.num_missing();
-  //if (missing.num_lost()) out << ", " << missing.num_lost() << " lost";
   out << ")";
   return out;
 }
@@ -3857,20 +3877,23 @@ void pg_missing_t::add_next_event(const pg_log_entry_t& e)
       // new object.
       if (is_missing_divergent_item) {  // use iterator
         rmissing.erase((missing_it->second).need.version);
-        missing_it->second = item(e.version, eversion_t());  // .have = nil
-      } else  // create new element in missing map
-        missing[e.soid] = item(e.version, eversion_t());     // .have = nil
+        (missing_it->second).update(e);  // .have = nil
+        (missing_it->second).have = eversion_t();
+      } else { // create new element in missing map
+        missing[e.soid] = item(e);     // .have = nil
+        missing[e.soid].have = eversion_t();
+      }
     } else if (is_missing_divergent_item) {
       // already missing (prior).
       rmissing.erase((missing_it->second).need.version);
-      (missing_it->second).need = e.version;  // leave .have unchanged.
+      (missing_it->second).update(e);     // leave .have unchanged.
     } else if (e.is_backlog()) {
       // May not have prior version
       assert(0 == "these don't exist anymore");
     } else {
       // not missing, we must have prior_version (if any)
       assert(!is_missing_divergent_item);
-      missing[e.soid] = item(e.version, e.prior_version);
+      missing[e.soid] = item(e);
     }
     rmissing[e.version.version] = e.soid;
   } else
@@ -3879,9 +3902,11 @@ void pg_missing_t::add_next_event(const pg_log_entry_t& e)
 
 void pg_missing_t::revise_need(hobject_t oid, eversion_t need)
 {
-  if (missing.count(oid)) {
-    rmissing.erase(missing[oid].need.version);
-    missing[oid].need = need;            // no not adjust .have
+  std::map<hobject_t, pg_missing_t::item, hobject_t::ComparatorWithDefault>::iterator p = missing.find(oid);
+  if (p != missing.end()) {
+    rmissing.erase(p->second.need.version);
+    p->second.need = need;            // no not adjust .have
+    p->second.can_recover_partial = false;
   } else {
     missing[oid] = item(need, eversion_t());
   }
@@ -3890,8 +3915,11 @@ void pg_missing_t::revise_need(hobject_t oid, eversion_t need)
 
 void pg_missing_t::revise_have(hobject_t oid, eversion_t have)
 {
-  if (missing.count(oid)) {
-    missing[oid].have = have;
+  std::map<hobject_t, pg_missing_t::item, hobject_t::ComparatorWithDefault>::iterator p = missing.find(oid);
+  if (p != missing.end()) {
+    (p->second).have = have;
+    (p->second).can_recover_partial = false;
+    (p->second).dirty_extents.clear();
   }
 }
 
