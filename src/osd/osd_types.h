@@ -2720,6 +2720,7 @@ struct pg_missing_t {
   WRITE_CLASS_ENCODER(item)
 
   map<hobject_t, item, hobject_t::ComparatorWithDefault> missing;  // oid -> (need v, have v)
+  map<hobject_t, pair<bool, interval_set<uint64_t> >, hobject_t::ComparatorWithDefault> missing_range;  // recovery data interval
   map<version_t, hobject_t> rmissing;  // v -> oid
 
   unsigned int num_missing() const;
@@ -2740,6 +2741,7 @@ struct pg_missing_t {
 
   void clear() {
     missing.clear();
+    missing_range.clear();
     rmissing.clear();
   }
 

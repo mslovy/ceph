@@ -3468,7 +3468,7 @@ void pg_log_entry_t::decode(bufferlist::iterator &bl)
     ::decode(extra_reqids, bl);
   if (struct_v >= 11) {
     ::decode(can_recover_partial, bl);
-    ::decode(dirty_data_internal, bl);
+    ::decode(dirty_data_interval, bl);
   } else {
     can_recover_partial = false;
   }
@@ -3726,20 +3726,29 @@ void pg_missing_t::resort(bool sort_bitwise)
     missing = map<hobject_t, item, hobject_t::ComparatorWithDefault>(
       hobject_t::ComparatorWithDefault(sort_bitwise));
     missing.insert(tmp.begin(), tmp.end());
+
+    map<hobject_t, pair<bool, interval_set<uint64_t> >, hobject_t::ComparatorWithDefault> tmp1;
+    tmp1.swap(missing_range);
+    missing_range = map<hobject_t, pair<bool, interval_set<uint64_t> >, hobject_t::ComparatorWithDefault>(
+      hobject_t::ComparatorWithDefault(sort_bitwise));
+    missing_range.insert(tmp1.begin(), tmp1.end());
   }
 }
 
 void pg_missing_t::encode(bufferlist &bl) const
 {
-  ENCODE_START(3, 2, bl);
+  ENCODE_START(4, 2, bl);
   ::encode(missing, bl);
+  ::encode(missing_range, bl);
   ENCODE_FINISH(bl);
 }
 
 void pg_missing_t::decode(bufferlist::iterator &bl, int64_t pool)
 {
-  DECODE_START_LEGACY_COMPAT_LEN(3, 2, 2, bl);
+  DECODE_START_LEGACY_COMPAT_LEN(4, 2, 2, bl);
   ::decode(missing, bl);
+  if (struct_v > 3)
+    ::decode(missing_range, bl);
   DECODE_FINISH(bl);
 
   if (struct_v < 3) {
@@ -3773,6 +3782,13 @@ void pg_missing_t::dump(Formatter *f) const
     f->open_object_section("item");
     f->dump_stream("object") << p->first;
     p->second.dump(f);
+    f->close_section();
+  }
+  f->open_array_section("missing_range");
+  for (map<hobject_t, pair<bool, interval_set<uint64_t> >, hobject_t::ComparatorWithDefault>::const_iterator p = missing_range.begin(); p != missing_range.end(); ++p) {
+    f->open_object_section("recovery_interval");
+    f->dump_stream("object") << p->first;
+    f->dump_stream("recovery_interval") << p->second;
     f->close_section();
   }
   f->close_section();
@@ -3815,6 +3831,7 @@ bool pg_missing_t::have_missing() const
 void pg_missing_t::swap(pg_missing_t& o)
 {
   missing.swap(o.missing);
+  missing_range.swap(o.missing_range);
   rmissing.swap(o.rmissing);
 }
 
@@ -3855,6 +3872,8 @@ void pg_missing_t::add_next_event(const pg_log_entry_t& e)
     bool is_missing_divergent_item = missing_it != missing.end();
     if (e.prior_version == eversion_t() || e.is_clone()) {
       // new object.
+      missing_range[e.soid].first = e.can_recover_partial;
+      missing_range[e.soid].second.clear();
       if (is_missing_divergent_item) {  // use iterator
         rmissing.erase((missing_it->second).need.version);
         missing_it->second = item(e.version, eversion_t());  // .have = nil
@@ -3871,6 +3890,8 @@ void pg_missing_t::add_next_event(const pg_log_entry_t& e)
       // not missing, we must have prior_version (if any)
       assert(!is_missing_divergent_item);
       missing[e.soid] = item(e.version, e.prior_version);
+      missing_range[e.soid].first &= e.can_recover_partial;
+      missing_range[e.soid].second.union_of(e.dirty_data_interval);
     }
     rmissing[e.version.version] = e.soid;
   } else
@@ -3885,6 +3906,7 @@ void pg_missing_t::revise_need(hobject_t oid, eversion_t need)
   } else {
     missing[oid] = item(need, eversion_t());
   }
+  missing_range[oid].first = false;
   rmissing[need.version] = oid;
 }
 
@@ -3893,11 +3915,13 @@ void pg_missing_t::revise_have(hobject_t oid, eversion_t have)
   if (missing.count(oid)) {
     missing[oid].have = have;
   }
+  missing_range[oid].first = false;
 }
 
 void pg_missing_t::add(const hobject_t& oid, eversion_t need, eversion_t have)
 {
   missing[oid] = item(need, have);
+  missing_range[oid].first = false;
   rmissing[need.version] = oid;
 }
 
@@ -3911,6 +3935,7 @@ void pg_missing_t::rm(const hobject_t& oid, eversion_t v)
 void pg_missing_t::rm(const std::map<hobject_t, pg_missing_t::item, hobject_t::ComparatorWithDefault>::iterator &m)
 {
   rmissing.erase(m->second.need.version);
+  missing_range.erase(m->first);
   missing.erase(m);
 }
 
@@ -3925,6 +3950,7 @@ void pg_missing_t::got(const hobject_t& oid, eversion_t v)
 void pg_missing_t::got(const std::map<hobject_t, pg_missing_t::item, hobject_t::ComparatorWithDefault>::iterator &m)
 {
   rmissing.erase(m->second.need.version);
+  missing_range.erase(m->first);
   missing.erase(m);
 }
 
