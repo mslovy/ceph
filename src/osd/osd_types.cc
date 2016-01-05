@@ -4953,7 +4953,7 @@ void ObjectRecoveryProgress::dump(Formatter *f) const
 
 void ObjectRecoveryInfo::encode(bufferlist &bl) const
 {
-  ENCODE_START(2, 1, bl);
+  ENCODE_START(3, 1, bl);
   ::encode(soid, bl);
   ::encode(version, bl);
   ::encode(size, bl);
@@ -4961,13 +4961,14 @@ void ObjectRecoveryInfo::encode(bufferlist &bl) const
   ::encode(ss, bl);
   ::encode(copy_subset, bl);
   ::encode(clone_subset, bl);
+  ::encode(can_recover_partial, bl);
   ENCODE_FINISH(bl);
 }
 
 void ObjectRecoveryInfo::decode(bufferlist::iterator &bl,
 				int64_t pool)
 {
-  DECODE_START(2, bl);
+  DECODE_START(3, bl);
   ::decode(soid, bl);
   ::decode(version, bl);
   ::decode(size, bl);
@@ -4975,6 +4976,8 @@ void ObjectRecoveryInfo::decode(bufferlist::iterator &bl,
   ::decode(ss, bl);
   ::decode(copy_subset, bl);
   ::decode(clone_subset, bl);
+  if (struct_v >2)
+    ::decode(can_recover_partial, bl);
   DECODE_FINISH(bl);
 
   if (struct_v < 2) {
