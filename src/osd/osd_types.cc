@@ -5181,11 +5181,12 @@ void PushOp::generate_test_instances(list<PushOp*> &o)
 
 void PushOp::encode(bufferlist &bl) const
 {
-  ENCODE_START(1, 1, bl);
+  ENCODE_START(2, 1, bl);
   ::encode(soid, bl);
   ::encode(version, bl);
   ::encode(data, bl);
   ::encode(data_included, bl);
+  ::encode(local_data_included, bl);
   ::encode(omap_header, bl);
   ::encode(omap_entries, bl);
   ::encode(attrset, bl);
@@ -5197,11 +5198,13 @@ void PushOp::encode(bufferlist &bl) const
 
 void PushOp::decode(bufferlist::iterator &bl)
 {
-  DECODE_START(1, bl);
+  DECODE_START(2, bl);
   ::decode(soid, bl);
   ::decode(version, bl);
   ::decode(data, bl);
   ::decode(data_included, bl);
+  if (struct_v >= 2)
+    ::decode(local_data_included, bl);
   ::decode(omap_header, bl);
   ::decode(omap_entries, bl);
   ::decode(attrset, bl);
@@ -5217,6 +5220,7 @@ void PushOp::dump(Formatter *f) const
   f->dump_stream("version") << version;
   f->dump_int("data_len", data.length());
   f->dump_stream("data_included") << data_included;
+  f->dump_stream("local_data_included") << local_data_included;
   f->dump_int("omap_header_len", omap_header.length());
   f->dump_int("omap_entries_len", omap_entries.size());
   f->dump_int("attrset_len", attrset.size());
@@ -5243,6 +5247,7 @@ ostream &PushOp::print(ostream &out) const
     << "PushOp(" << soid
     << ", version: " << version
     << ", data_included: " << data_included
+    << ", local_data_included: " << local_data_included
     << ", data_size: " << data.length()
     << ", omap_header_size: " << omap_header.length()
     << ", omap_entries_size: " << omap_entries.size()

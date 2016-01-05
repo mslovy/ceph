@@ -2539,14 +2539,14 @@ struct pg_log_entry_t {
 
   pg_log_entry_t()
    : user_version(0), op(0),
-     invalid_hash(false), invalid_pool(false), omap_unchanged(false) { dirty_extents.insert(0, (uint64_t - 1)); }
+     invalid_hash(false), invalid_pool(false), omap_unchanged(false) { dirty_extents.insert(0, (uint64_t) - 1); }
   pg_log_entry_t(int _op, const hobject_t& _soid,
                 const eversion_t& v, const eversion_t& pv,
                 version_t uv,
                 const osd_reqid_t& rid, const utime_t& mt)
    : soid(_soid), reqid(rid), version(v), prior_version(pv), user_version(uv),
      mtime(mt), op(_op), invalid_hash(false), invalid_pool(false), omap_unchanged(false)
-     { dirty_extents.insert(0, (uint64_t - 1)); }
+     { dirty_extents.insert(0, (uint64_t) - 1); }
       
   bool is_clone() const { return op == CLONE; }
   bool is_modify() const { return op == MODIFY; }
@@ -2744,7 +2744,7 @@ struct pg_missing_t {
     explicit item(eversion_t n) : need(n), omap_unchanged(false) {}  // have no old version
     item(eversion_t n, eversion_t h) : need(n), have(h), omap_unchanged(false) {}
     item(const pg_log_entry_t& e) : need(e.version), have(e.prior_version), omap_unchanged(e.omap_unchanged) {
-        dirty_extents.insert(e.dirty_extents);
+      dirty_extents.insert(e.dirty_extents);
     }
 
     void update(const pg_log_entry_t& e) {
@@ -3875,6 +3875,7 @@ struct PushOp {
   eversion_t version;
   bufferlist data;
   interval_set<uint64_t> data_included;
+  interval_set<uint64_t> local_data_included;
   bufferlist omap_header;
   map<string, bufferlist> omap_entries;
   map<string, bufferlist> attrset;

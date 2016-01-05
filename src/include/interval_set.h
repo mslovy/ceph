@@ -439,6 +439,30 @@ class interval_set {
       insert(p->first, p->second);
   }
 
+  void subtract_of(const interval_set &a, const interval_set &b) {
+    assert(&a != this);
+    assert(&b != this);
+    clear();
+
+    //cout << "union_of" << endl;
+
+    // a
+    m = a.m;
+    _size = a._size;
+
+    // - (a*b)
+    interval_set ab;
+    ab.intersection_of(a, b);
+    subtract(ab);
+
+    return;
+  }
+
+  void subtract_of(const interval_set& b) {
+    interval_set a;
+    swap(a);
+    subtract_of(a, b);
+  }
 
   void intersection_of(const interval_set &a, const interval_set &b) {
     assert(&a != this);
