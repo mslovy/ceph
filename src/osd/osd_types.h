@@ -3738,8 +3738,9 @@ struct ObjectRecoveryInfo {
   SnapSet ss;
   interval_set<uint64_t> copy_subset;
   map<hobject_t, interval_set<uint64_t>, hobject_t::BitwiseComparator> clone_subset;
+  bool can_recover_partial;
 
-  ObjectRecoveryInfo() : size(0) { }
+  ObjectRecoveryInfo() : size(0), can_recover_partial(false) { }
 
   static void generate_test_instances(list<ObjectRecoveryInfo*>& o);
   void encode(bufferlist &bl) const;

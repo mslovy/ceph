@@ -1308,7 +1308,7 @@ void ReplicatedBackend::calc_head_subsets(
   const pg_missing_t& missing,
   const hobject_t &last_backfill,
   interval_set<uint64_t>& data_subset,
-  map<hobject_t, interval_set<uint64_t>, hobject_t::BitwiseComparator>& clone_subsets)
+  map<hobject_t, interval_set<uint64_t>, hobject_t::BitwiseComparator>& clone_subsets, bool& can_recover_partial)
 {
   dout(10) << "calc_head_subsets " << head
 	   << " clone_overlap " << snapset.clone_overlap << dendl;
@@ -1316,6 +1316,12 @@ void ReplicatedBackend::calc_head_subsets(
   uint64_t size = obc->obs.oi.size;
   if (size)
     data_subset.insert(0, size);
+  map<hobject_t, pair<bool, interval_set<uint64_t> >, hobject_t::ComparatorWithDefault>::const_iterator it
+    = missing.missing_range.find(head);
+  assert(it != missing.missing_range.end());
+  can_recover_partial = it->second.first;
+  if (can_recover_partial)
+    data_subset.intersection_of(it->second.second);
 
   if (get_parent()->get_pool().allow_incomplete_clones()) {
     dout(10) << __func__ << ": caching (was) enabled, skipping clone subsets" << dendl;
@@ -1520,7 +1526,14 @@ void ReplicatedBackend::prepare_pull(
   } else {
     // pulling head or unversioned object.
     // always pull the whole thing.
-    recovery_info.copy_subset.insert(0, (uint64_t)-1);
+    map<hobject_t, pair<bool, interval_set<uint64_t> >, hobject_t::ComparatorWithDefault>::const_iterator it =
+      get_parent()->get_local_missing().missing_range.find(soid);
+    assert(it != get_parent()->get_local_missing().missing_range.end());
+    recovery_info.can_recover_partial = it->second.first;
+    if (recovery_info.can_recover_partial)
+      recovery_info.copy_subset.insert(it->second.second);
+    else
+      recovery_info.copy_subset.insert(0, (uint64_t)-1);
     recovery_info.size = ((uint64_t)-1);
   }
 
@@ -1561,6 +1574,7 @@ void ReplicatedBackend::prep_push_to_replica(
 
   map<hobject_t, interval_set<uint64_t>, hobject_t::BitwiseComparator> clone_subsets;
   interval_set<uint64_t> data_subset;
+  bool can_recover_partial = false;
 
   // are we doing a clone on the replica?
   if (soid.snap && soid.snap < CEPH_NOSNAP) {
@@ -1604,10 +1618,9 @@ void ReplicatedBackend::prep_push_to_replica(
       obc,
       ssc->snapset, soid, get_parent()->get_shard_missing().find(peer)->second,
       get_parent()->get_shard_info().find(peer)->second.last_backfill,
-      data_subset, clone_subsets);
+      data_subset, clone_subsets, can_recover_partial);
   }
-
-  prep_push(obc, soid, peer, oi.version, data_subset, clone_subsets, pop, cache_dont_need);
+  prep_push(obc, soid, peer, oi.version, data_subset, clone_subsets, pop, cache_dont_need, can_recover_partial);
 }
 
 void ReplicatedBackend::prep_push(ObjectContextRef obc,
@@ -1631,7 +1644,7 @@ void ReplicatedBackend::prep_push(
   interval_set<uint64_t> &data_subset,
   map<hobject_t, interval_set<uint64_t>, hobject_t::BitwiseComparator>& clone_subsets,
   PushOp *pop,
-  bool cache_dont_need)
+  bool cache_dont_need, bool can_recover_partial)
 {
   get_parent()->begin_peer_recover(peer, soid);
   // take note.
@@ -1643,6 +1656,7 @@ void ReplicatedBackend::prep_push(
   pi.recovery_info.soid = soid;
   pi.recovery_info.oi = obc->obs.oi;
   pi.recovery_info.version = version;
+  pi.recovery_info.can_recover_partial = can_recover_partial;
   pi.recovery_progress.first = true;
   pi.recovery_progress.data_recovered_to = 0;
   pi.recovery_progress.data_complete = 0;
@@ -1706,6 +1720,7 @@ void ReplicatedBackend::submit_push_data(
   ObjectStore::Transaction *t)
 {
   hobject_t target_oid;
+  bool can_recover_partial = recovery_info.can_recover_partial;
   if (first && complete) {
     target_oid = recovery_info.soid;
   } else {
@@ -1715,12 +1730,17 @@ void ReplicatedBackend::submit_push_data(
       dout(10) << __func__ << ": Adding oid "
 	       << target_oid << " in the temp collection" << dendl;
       add_temp_obj(target_oid);
+      if (can_recover_partial)
+        t->collection_move_rename(coll, ghobject_t(recovery_info.soid),
+				  coll, ghobject_t(target_oid));
     }
   }
 
   if (first) {
-    t->remove(coll, ghobject_t(target_oid));
-    t->touch(coll, ghobject_t(target_oid));
+    if (!can_recover_partial) {
+      t->remove(coll, ghobject_t(target_oid));
+      t->touch(coll, ghobject_t(target_oid));
+    }
     t->truncate(coll, ghobject_t(target_oid), recovery_info.size);
     t->omap_setheader(coll, ghobject_t(target_oid), omap_header);
   }
@@ -1748,7 +1768,8 @@ void ReplicatedBackend::submit_push_data(
       dout(10) << __func__ << ": Removing oid "
 	       << target_oid << " from the temp collection" << dendl;
       clear_temp_obj(target_oid);
-      t->remove(coll, ghobject_t(recovery_info.soid));
+      if (!can_recover_partial)
+        t->remove(coll, ghobject_t(recovery_info.soid));
       t->collection_move_rename(coll, ghobject_t(target_oid),
 				coll, ghobject_t(recovery_info.soid));
     }
@@ -2280,9 +2301,14 @@ void ReplicatedBackend::handle_pull(pg_shard_t peer, PullOp &op, PushOp *reply)
     if (progress.first && recovery_info.size == ((uint64_t)-1)) {
       // Adjust size and copy_subset
       recovery_info.size = st.st_size;
-      recovery_info.copy_subset.clear();
-      if (st.st_size)
-        recovery_info.copy_subset.insert(0, st.st_size);
+      assert(!recovery_info.copy_subset.empty());
+      if (st.st_size) {
+        interval_set<uint64_t> temp;
+        temp.insert(0, st.st_size);
+        recovery_info.copy_subset.intersection_of(temp);
+      }
+      else
+        recovery_info.copy_subset.clear();
       assert(recovery_info.clone_subset.empty());
     }
 
