@@ -989,9 +989,15 @@ void PGLog::read_log(ObjectStore *store, coll_t pg_coll,
     for (list<pg_log_entry_t>::reverse_iterator i = log.log.rbegin();
 	 i != log.log.rend();
 	 ++i) {
-      if (i->version <= info.last_complete) break;
       if (cmp(i->soid, info.last_backfill, info.last_backfill_bitwise) > 0)
 	continue;
+      map<hobject_t, pg_missing_t::item, hobject_t::ComparatorWithDefault>::iterator miter
+	= missing.missing.find(i->soid);
+      if (miter != missing.missing.end()
+	&& miter->second.have != eversion_t()
+	&& i->version > miter->second.have)
+	miter->second.update(*i);
+      if (i->version <= info.last_complete) continue;
       if (did.count(i->soid)) continue;
       did.insert(i->soid);
       
@@ -1007,8 +1013,12 @@ void PGLog::read_log(ObjectStore *store, coll_t pg_coll,
 	object_info_t oi(bv);
 	if (oi.version < i->version) {
 	  ldpp_dout(dpp, 15) << "read_log  missing " << *i
-			     << " (have " << oi.version << ")" << dendl;
+			     << " (have " << oi.version << ")"
+			     << " unmodified_omap " << i->unmodified_omap
+			     << " unmodified_extents " << i->unmodified_extents << dendl;
 	  missing.add(i->soid, i->version, oi.version);
+	  missing.missing[i->soid].unmodified_omap = i->unmodified_omap;
+	  missing.missing[i->soid].unmodified_extents.insert(i->unmodified_extents);
 	}
       } else {
 	ldpp_dout(dpp, 15) << "read_log  missing " << *i << dendl;
