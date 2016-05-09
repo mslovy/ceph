@@ -33,6 +33,7 @@
 #include "include/CompatSet.h"
 #include "common/histogram.h"
 #include "include/interval_set.h"
+#include "include/bounded_lossy_interval_set.h"
 #include "include/inline_memory.h"
 #include "common/Formatter.h"
 #include "common/bloom_filter.hpp"
@@ -2571,7 +2572,7 @@ struct pg_log_entry_t {
   bool invalid_hash; // only when decoding sobject_t based entries
   bool invalid_pool; // only when decoding pool-less hobject based entries
   bool unmodified_omap;
-  interval_set<uint64_t>  unmodified_extents; // describes the modified extents for a object
+  bounded_lossy_interval_set<uint64_t>  unmodified_extents; // describes the modified extents for a object
 
   pg_log_entry_t()
    : user_version(0), op(0),
@@ -2742,7 +2743,7 @@ struct pg_missing_t {
   struct item {
     eversion_t need, have;
     bool unmodified_omap;
-    interval_set<uint64_t> unmodified_extents;
+    bounded_lossy_interval_set<uint64_t> unmodified_extents;
     item() : unmodified_omap(false) {}
     explicit item(eversion_t n) : need(n), unmodified_omap(false) {}  // have no old version
     item(eversion_t n, eversion_t h) : need(n), have(h), unmodified_omap(false) {}

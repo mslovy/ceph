@@ -3513,6 +3513,9 @@ void pg_log_entry_t::decode(bufferlist::iterator &bl)
   if (struct_v >= 11) {
     ::decode(unmodified_omap, bl);
     ::decode(unmodified_extents, bl);
+  } else {
+    unmodified_omap = false;
+    unmodified_extents.clear();
   }
   DECODE_FINISH(bl);
 }

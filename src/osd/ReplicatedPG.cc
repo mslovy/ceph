@@ -5008,6 +5008,8 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	    t->truncate(soid, op.extent.truncate_size);
 	    oi.truncate_seq = op.extent.truncate_seq;
 	    oi.truncate_size = op.extent.truncate_size;
+	    ctx->modified_ranges.clear();
+	    ctx->modified_ranges.insert(op.extent.truncate_size, (uint64_t) - 1);
 	    if (op.extent.truncate_size != oi.size) {
 	      ctx->delta_stats.num_bytes -= oi.size;
 	      ctx->delta_stats.num_bytes += op.extent.truncate_size;
@@ -5209,11 +5211,9 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	}
 
 	t->truncate(soid, op.extent.offset);
-	if (oi.size > op.extent.offset) {
-	  interval_set<uint64_t> trim;
-	  trim.insert(op.extent.offset, oi.size-op.extent.offset);
-	  ctx->modified_ranges.union_of(trim);
-	}
+	//need recover whole object after truncate Ops
+	ctx->modified_ranges.clear();
+	ctx->modified_ranges.insert(op.extent.offset, (uint64_t) - 1);
 	if (op.extent.offset != oi.size) {
 	  ctx->delta_stats.num_bytes -= oi.size;
 	  ctx->delta_stats.num_bytes += op.extent.offset;
@@ -5804,6 +5804,7 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	  }
 	}
 	t->omap_setkeys(soid, to_set_bl);
+	ctx->unmodified_omap = false;
 	ctx->delta_stats.num_wr++;
       }
       obs.oi.set_flag(object_info_t::FLAG_OMAP);
@@ -5844,6 +5845,7 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	}
 	if (oi.is_omap()) {
 	  t->omap_clear(soid);
+	  ctx->unmodified_omap = false;
 	  ctx->delta_stats.num_wr++;
 	  obs.oi.clear_omap_digest();
 	  obs.oi.clear_flag(object_info_t::FLAG_OMAP);
@@ -5876,6 +5878,7 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	}
 	tracepoint(osd, do_osd_op_pre_omaprmkeys, soid.oid.name.c_str(), soid.snap.val);
 	t->omap_rmkeys(soid, to_rm_bl);
+	ctx->unmodified_omap = false;
 	ctx->delta_stats.num_wr++;
       }
       obs.oi.clear_omap_digest();
@@ -6800,6 +6803,8 @@ void ReplicatedPG::finish_ctx(OpContext *ctx, int log_op_type, bool maintain_ssc
 				    ctx->obs->oi.version,
 				    ctx->user_at_version, ctx->reqid,
 				    ctx->mtime));
+  ctx->log.back().unmodified_omap = ctx->unmodified_omap;
+  ctx->log.back().unmodified_extents.subtract(ctx->modified_ranges);
   if (soid.snap < CEPH_NOSNAP) {
     switch (log_op_type) {
     case pg_log_entry_t::MODIFY:

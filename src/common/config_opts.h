@@ -700,6 +700,9 @@ OPTION(osd_op_num_shards, OPT_INT, 5)
 OPTION(osd_op_queue, OPT_STR, "prio") // PrioritzedQueue (prio), Weighted Priority Queue (wpq), or debug_random
 OPTION(osd_op_queue_cut_off, OPT_STR, "low") // Min priority to go to strict queue. (low, high, debug_random)
 
+// Set the maximum extents in interval set for a single pg_log_entry_t
+OPTION(osd_recover_unmodified_extents_limit, OPT_INT, 10)
+
 // Set to true for testing.  Users should NOT set this.
 // If set to true even after reading enough shards to
 // decode the object, any error will be reported.

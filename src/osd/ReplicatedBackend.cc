@@ -1277,6 +1277,20 @@ void ReplicatedBackend::calc_head_subsets(
   uint64_t size = obc->obs.oi.size;
   if (size)
     data_subset.insert(0, size);
+  if (parent->min_peer_features() & CEPH_OSD_PARTIAL_RECOVERY) {
+    map<hobject_t, pg_missing_t::item, hobject_t::ComparatorWithDefault>::const_iterator it
+      = missing.missing.find(head);
+    assert(it != missing.missing.end());
+    bounded_lossy_interval_set<uint64_t> unmodified;
+    if (size)
+      unmodified.insert(0, size);
+    unmodified.intersection_of(it->second.unmodified_extents);
+    data_subset.subtract(unmodified.get_intervals());
+      dout(10) << "calc_head_subsets " << head
+               << "  unmodified "  << unmodified
+               << "  data_subset " << data_subset << dendl;
+      return;
+  }
 
   if (get_parent()->get_pool().allow_incomplete_clones()) {
     dout(10) << __func__ << ": caching (was) enabled, skipping clone subsets" << dendl;
@@ -1416,9 +1430,10 @@ void ReplicatedBackend::prepare_pull(
   ObjectContextRef headctx,
   RPGHandle *h)
 {
-  assert(get_parent()->get_local_missing().missing.count(soid));
-  eversion_t _v = get_parent()->get_local_missing().missing.find(
-    soid)->second.need;
+  map<hobject_t, pg_missing_t::item, hobject_t::ComparatorWithDefault>::const_iterator missing_iter =
+      get_parent()->get_local_missing().missing.find(soid);
+  assert(missing_iter != get_parent()->get_local_missing().missing.end());
+  eversion_t _v = missing_iter->second.need;
   assert(_v == v);
   const map<hobject_t, set<pg_shard_t>, hobject_t::BitwiseComparator> &missing_loc(
     get_parent()->get_missing_loc_shards());
@@ -1482,6 +1497,10 @@ void ReplicatedBackend::prepare_pull(
     // pulling head or unversioned object.
     // always pull the whole thing.
     recovery_info.copy_subset.insert(0, (uint64_t)-1);
+    if (!missing_iter->second.unmodified_extents.empty() &&
+        (parent->min_peer_features() & CEPH_OSD_PARTIAL_RECOVERY)) {
+      recovery_info.copy_subset.subtract(missing_iter->second.unmodified_extents.get_intervals());
+    }
     recovery_info.size = ((uint64_t)-1);
   }
 
@@ -1493,7 +1512,8 @@ void ReplicatedBackend::prepare_pull(
   op.recovery_info.soid = soid;
   op.recovery_info.version = v;
   op.recovery_progress.data_complete = false;
-  op.recovery_progress.omap_complete = false;
+  op.recovery_progress.omap_complete = missing_iter->second.unmodified_omap &&
+    (parent->min_peer_features() & CEPH_OSD_PARTIAL_RECOVERY);
   op.recovery_progress.data_recovered_to = 0;
   op.recovery_progress.first = true;
 
@@ -1595,6 +1615,11 @@ void ReplicatedBackend::prep_push(
   bool cache_dont_need)
 {
   get_parent()->begin_peer_recover(peer, soid);
+  map<pg_shard_t, pg_missing_t>::const_iterator pmissing_iter =
+    get_parent()->get_shard_missing().find(peer);
+  map<hobject_t, pg_missing_t::item, hobject_t::ComparatorWithDefault>::const_iterator missing_iter =
+    pmissing_iter->second.missing.find(soid);
+  assert(missing_iter != pmissing_iter->second.missing.end());
   // take note.
   PushInfo &pi = pushing[soid][peer];
   pi.obc = obc;
@@ -1607,7 +1632,8 @@ void ReplicatedBackend::prep_push(
   pi.recovery_progress.first = true;
   pi.recovery_progress.data_recovered_to = 0;
   pi.recovery_progress.data_complete = 0;
-  pi.recovery_progress.omap_complete = 0;
+  pi.recovery_progress.omap_complete = missing_iter->second.unmodified_omap &&
+    (parent->min_peer_features() & CEPH_OSD_PARTIAL_RECOVERY);
 
   ObjectRecoveryProgress new_progress;
   int r = build_push_op(pi.recovery_info,
@@ -1657,6 +1683,7 @@ int ReplicatedBackend::send_pull_legacy(int prio, pg_shard_t peer,
 void ReplicatedBackend::submit_push_data(
   ObjectRecoveryInfo &recovery_info,
   bool first,
+  bool unmodified_omap,
   bool complete,
   bool cache_dont_need,
   const interval_set<uint64_t> &intervals_included,
@@ -1667,8 +1694,14 @@ void ReplicatedBackend::submit_push_data(
   ObjectStore::Transaction *t)
 {
   hobject_t target_oid;
+  bool need_remove = false;
+  bool need_clone = false;
   if (first && complete) {
     target_oid = recovery_info.soid;
+    if (recovery_info.copy_subset.contains(0, recovery_info.size)) {
+      assert(recovery_info.copy_subset.size() == recovery_info.size);
+      need_remove = true;
+    }
   } else {
     target_oid = get_parent()->get_temp_recovery_object(recovery_info.version,
 							recovery_info.soid.snap);
@@ -1676,14 +1709,70 @@ void ReplicatedBackend::submit_push_data(
       dout(10) << __func__ << ": Adding oid "
 	       << target_oid << " in the temp collection" << dendl;
       add_temp_obj(target_oid);
+      need_remove = true;
+      need_clone = true;
     }
   }
 
   if (first) {
-    t->remove(coll, ghobject_t(target_oid));
-    t->touch(coll, ghobject_t(target_oid));
+    if (need_remove) {
+      t->remove(coll, ghobject_t(target_oid));
+      t->touch(coll, ghobject_t(target_oid));
+    } else {
+      //remove xattr and update later if overwrite on original object
+      t->rmattrs(coll, ghobject_t(target_oid));
+      //if need update omap, clear the previous content first
+      if (!unmodified_omap)
+        t->omap_clear(coll, ghobject_t(target_oid));
+    }
     t->truncate(coll, ghobject_t(target_oid), recovery_info.size);
     t->omap_setheader(coll, ghobject_t(target_oid), omap_header);
+
+    if (need_clone) {
+      // need preserver local omap content if unmodified
+      int r;
+      if (unmodified_omap) {
+        map<string, bufferlist> out;
+        r = store->omap_get(coll, ghobject_t(recovery_info.soid), NULL, &out);
+        if (r == 0) {
+          t->omap_setkeys(coll, ghobject_t(target_oid), out);
+        } else if (r == -ENOENT) {
+          dout(10) << " local object " << recovery_info.soid << " does not exist "
+             <<" skip retrieve object map" << dendl;
+        } else {
+          derr << "tried to get object map from local object " << recovery_info.soid
+               << " but got " << cpp_strerror(-r) << "\n" << dendl;
+          assert(0 == "fail to retrieve object map");
+        }
+      }
+      //clone overlap content in local object
+      struct stat st;
+      r = store->stat(coll, ghobject_t(recovery_info.soid), &st);
+      if (r == 0) {
+        uint64_t local_size = MIN(recovery_info.size, (uint64_t)st.st_size);
+        interval_set<uint64_t> local_intervals_included, local_intervals_excluded;
+        if (local_size) {
+          local_intervals_included.insert(0, local_size);
+          local_intervals_excluded.intersection_of(local_intervals_included, recovery_info.copy_subset);
+          local_intervals_included.subtract(local_intervals_excluded);
+        }
+        for (interval_set<uint64_t>::const_iterator q = local_intervals_included.begin();
+       q != local_intervals_included.end();
+       ++q) {
+          dout(15) << " clone_range " << recovery_info.soid << " "
+             << q.get_start() << "~" << q.get_len() << dendl;
+          t->clone_range(coll, ghobject_t(recovery_info.soid), ghobject_t(target_oid),
+             q.get_start(), q.get_len(), q.get_start());
+        }
+      } else if (r == -ENOENT) {
+        dout(10) << " local object " << recovery_info.soid << " does not exist "
+           << " skip clone_range " << dendl;
+      } else {
+        get_parent()->clog_error() << get_info().pgid << " "
+                  << " tried to clone_range from local object " << recovery_info.soid
+                  << " but got " << cpp_strerror(-r) << "\n";
+      }
+    }
   }
   uint64_t off = 0;
   uint32_t fadvise_flags = CEPH_OSD_OP_FLAG_FADVISE_SEQUENTIAL;
@@ -1789,6 +1878,7 @@ bool ReplicatedBackend::handle_pull_response(
   }
 
   bool first = pi.recovery_progress.first;
+  bool unmodified_omap = pi.recovery_progress.omap_complete;
   if (first) {
     // attrs only reference the origin bufferlist (decode from MOSDPGPush message)
     // whose size is much greater than attrs in recovery. If obc cache it (get_obc maybe
@@ -1825,6 +1915,7 @@ bool ReplicatedBackend::handle_pull_response(
   bool complete = pi.is_complete();
 
   submit_push_data(pi.recovery_info, first,
+		   unmodified_omap,
 		   complete, pi.cache_dont_need,
 		   data_included, data,
 		   pop.omap_header,
@@ -1859,12 +1950,14 @@ void ReplicatedBackend::handle_push(
   bufferlist data;
   data.claim(pop.data);
   bool first = pop.before_progress.first;
+  bool unmodified_omap = pop.before_progress.omap_complete;
   bool complete = pop.after_progress.data_complete &&
     pop.after_progress.omap_complete;
 
   response->soid = pop.recovery_info.soid;
   submit_push_data(pop.recovery_info,
 		   first,
+		   unmodified_omap,
 		   complete,
 		   true, // must be replicate
 		   pop.data_included,
@@ -2024,6 +2117,7 @@ int ReplicatedBackend::build_push_op(const ObjectRecoveryInfo &recovery_info,
       }
       out_op->data_included.span_of(copy_subset, progress.data_recovered_to,
                                     available);
+
       if (out_op->data_included.empty()) // zero filled section, skip to end!
         new_progress.data_recovered_to = recovery_info.copy_subset.range_end();
       else
@@ -2240,9 +2334,13 @@ void ReplicatedBackend::handle_pull(pg_shard_t peer, PullOp &op, PushOp *reply)
     if (progress.first && recovery_info.size == ((uint64_t)-1)) {
       // Adjust size and copy_subset
       recovery_info.size = st.st_size;
-      recovery_info.copy_subset.clear();
-      if (st.st_size)
-        recovery_info.copy_subset.insert(0, st.st_size);
+      if (st.st_size) {
+        interval_set<uint64_t> object_range;
+        object_range.insert(0, st.st_size);
+        recovery_info.copy_subset.intersection_of(object_range);
+      } else {
+        recovery_info.copy_subset.clear();
+      }
       assert(recovery_info.clone_subset.empty());
     }
 

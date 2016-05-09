@@ -268,6 +268,7 @@ private:
                     bool cache_dont_need = true);
   void submit_push_data(ObjectRecoveryInfo &recovery_info,
 			bool first,
+			bool unmodified_omap,
 			bool complete,
 			bool cache_dont_need,
 			const interval_set<uint64_t> &intervals_included,
