@@ -85,6 +85,7 @@ noinst_HEADERS += \
 	include/inline_memory.h \
 	include/intarith.h \
 	include/interval_set.h \
+	include/bounded_lossy_interval_set.h \
 	include/int_types.h \
 	include/ipaddr.h \
 	include/krbd.h \
