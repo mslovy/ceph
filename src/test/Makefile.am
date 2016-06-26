@@ -442,6 +442,11 @@ unittest_interval_set_CXXFLAGS = $(UNITTEST_CXXFLAGS)
 unittest_interval_set_LDADD = $(UNITTEST_LDADD) $(CEPH_GLOBAL)
 check_TESTPROGRAMS += unittest_interval_set
 
+unittest_bounded_lossy_interval_set_SOURCES = test/common/test_bounded_lossy_interval_set.cc
+unittest_bounded_lossy_interval_set_CXXFLAGS = $(UNITTEST_CXXFLAGS)
+unittest_bounded_lossy_interval_set_LDADD = $(UNITTEST_LDADD) $(CEPH_GLOBAL)
+check_TESTPROGRAMS += unittest_bounded_lossy_interval_set
+
 unittest_subprocess_SOURCES = test/test_subprocess.cc
 unittest_subprocess_LDADD = $(LIBCOMMON) $(UNITTEST_LDADD)
 unittest_subprocess_CXXFLAGS = $(UNITTEST_CXXFLAGS)
