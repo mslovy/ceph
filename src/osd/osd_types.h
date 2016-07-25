@@ -2514,6 +2514,19 @@ public:
 WRITE_CLASS_ENCODER(ObjectModDesc)
 
 
+class ObjectCleanRegions {
+  bounded_lossy_interval_set<uint64_t> clean_offsets;
+  bool clean_omap;
+public:
+  ObjectCleanRegions();
+  void merge(const ObjectCleanRegions &other);
+  void mark_data_region_dirty(uint64_t offset, uint64_t len);
+  void mark_omap_dirty();
+  interval_set<uint64_t> get_dirty_regions() const;
+  bool omap_is_dirty() const;
+};
+WRITE_CLASS_ENCODER(ObjectCleanRegions)
+
 /**
  * pg_log_entry_t - single entry/event in pg log
  *
@@ -2571,8 +2584,10 @@ struct pg_log_entry_t {
   __s32      op;
   bool invalid_hash; // only when decoding sobject_t based entries
   bool invalid_pool; // only when decoding pool-less hobject based entries
-  bool unmodified_omap;
-  bounded_lossy_interval_set<uint64_t>  unmodified_extents; // describes the modified extents for a object
+
+  ObjectCleanRegions clean_regions;
+  // bool unmodified_omap;
+  // bounded_lossy_interval_set<uint64_t>  unmodified_extents; // describes the modified extents for a object
 
   pg_log_entry_t()
    : user_version(0), op(0),
@@ -2742,8 +2757,9 @@ struct pg_missing_t {
 
   struct item {
     eversion_t need, have;
-    bool unmodified_omap;
-    bounded_lossy_interval_set<uint64_t> unmodified_extents;
+    ObjectCleanRegions clean_regions;
+    //bool unmodified_omap;
+    //bounded_lossy_interval_set<uint64_t> unmodified_extents;
     item() : unmodified_omap(false) {}
     explicit item(eversion_t n) : need(n), unmodified_omap(false) {}  // have no old version
     item(eversion_t n, eversion_t h) : need(n), have(h), unmodified_omap(false) {}

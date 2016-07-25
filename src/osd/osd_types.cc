@@ -3398,6 +3398,44 @@ void ObjectModDesc::decode(bufferlist::iterator &_bl)
   DECODE_FINISH(_bl);
 }
 
+ObjectCleanRegions::ObjectCleanRegions()
+{
+  clean_offsets.insert(0, (uint64_t-1));
+  clean_omap = true;
+}
+
+void ObjectCleanRegions::merge(const ObjectCleanRegions &other)
+{
+  clean_offsets.intersection_of(other);
+  clean_omap = clean_omap && other.clean_omap;
+}
+
+void ObjectCleanRegions::mark_data_region_dirty(uint64_t offset, uint64_t len)
+{
+  bounded_lossy_interval_set<uint64_t> clean_region;
+  clean_region.insert(0, (uint64_t - 1));
+  clean_region.erase(offset, len);
+  clean_offsets.intersection_of(clean_region);
+}
+
+void ObjectCleanRegions::mark_omap_dirty()
+{
+  clean_omap = false;
+}
+
+interval_set<uint64_t> ObjectCleanRegions::get_dirty_regions() const
+{
+   bounded_lossy_interval_set<uint64_t> dirty_region;
+   dirty_region.insert(0, (uint64_t-1));
+   dirty_region.subtract(clean_offsets);
+   return dirty_region.get_intervals();
+}
+
+bool ObjectCleanRegions::omap_is_dirty() const
+{
+  return !clean_omap;
+}
+
 // -- pg_log_entry_t --
 
 string pg_log_entry_t::get_key_name() const
