@@ -2518,12 +2518,23 @@ class ObjectCleanRegions {
   bounded_lossy_interval_set<uint64_t> clean_offsets;
   bool clean_omap;
 public:
-  ObjectCleanRegions();
+  ObjectCleanRegions() {
+    clean_offsets.insert(0, (uint64_t-1));
+    clean_omap = true;
+  }
+  ObjectCleanRegions(uint64_t offset, uint64_t len, bool co) : clean_omap(co) {
+    clean_offsets.insert(offset, len);
+  }
   void merge(const ObjectCleanRegions &other);
   void mark_data_region_dirty(uint64_t offset, uint64_t len);
   void mark_omap_dirty();
   interval_set<uint64_t> get_dirty_regions() const;
   bool omap_is_dirty() const;
+
+  void encode(bufferlist &bl) const;
+  void decode(bufferlist::iterator &bl);
+  void dump(Formatter *f) const;
+  static void generate_test_instances(list<ObjectCleanRegions*>& o);
 };
 WRITE_CLASS_ENCODER(ObjectCleanRegions)
 
@@ -2591,17 +2602,13 @@ struct pg_log_entry_t {
 
   pg_log_entry_t()
    : user_version(0), op(0),
-     invalid_hash(false), invalid_pool(false), unmodified_omap(true) {
-    unmodified_extents.insert(0, (uint64_t) - 1);
-  }
+     invalid_hash(false), invalid_pool(false) { }
   pg_log_entry_t(int _op, const hobject_t& _soid,
                 const eversion_t& v, const eversion_t& pv,
                 version_t uv,
                 const osd_reqid_t& rid, const utime_t& mt)
    : soid(_soid), reqid(rid), version(v), prior_version(pv), user_version(uv),
-     mtime(mt), op(_op), invalid_hash(false), invalid_pool(false), unmodified_omap(true) {
-    unmodified_extents.insert(0, (uint64_t) - 1);
-  }
+     mtime(mt), op(_op), invalid_hash(false), invalid_pool(false) { }
       
   bool is_clone() const { return op == CLONE; }
   bool is_modify() const { return op == MODIFY; }
@@ -2760,17 +2767,16 @@ struct pg_missing_t {
     ObjectCleanRegions clean_regions;
     //bool unmodified_omap;
     //bounded_lossy_interval_set<uint64_t> unmodified_extents;
-    item() : unmodified_omap(false) {}
-    explicit item(eversion_t n) : need(n), unmodified_omap(false) {}  // have no old version
-    item(eversion_t n, eversion_t h) : need(n), have(h), unmodified_omap(false) {}
-    item(const pg_log_entry_t& e) : need(e.version), have(e.prior_version), unmodified_omap(e.unmodified_omap) {
-      unmodified_extents.insert(e.unmodified_extents);
+    item() : {}
+    explicit item(eversion_t n) : need(n) {}  // have no old version
+    item(eversion_t n, eversion_t h, bool old_style = false) : need(n), have(h) {
+      if (old_style) {
+        clean_regions.mark_data_region_dirty(0, (uint64_t - 1));
+        clean_regions.mark_omap_dirty();
+      }
     }
+    item(const pg_log_entry_t& e) : need(e.version), have(e.prior_version), clean_regions(e.clean_regions) {}
 
-    void update(const pg_log_entry_t& e) {
-      unmodified_omap = (unmodified_omap && e.unmodified_omap);
-      unmodified_extents.intersection_of(e.unmodified_extents);
-    }
     void encode(bufferlist& bl) const {
       ::encode(need, bl);
       ::encode(have, bl);

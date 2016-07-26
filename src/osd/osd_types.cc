@@ -3398,12 +3398,6 @@ void ObjectModDesc::decode(bufferlist::iterator &_bl)
   DECODE_FINISH(_bl);
 }
 
-ObjectCleanRegions::ObjectCleanRegions()
-{
-  clean_offsets.insert(0, (uint64_t-1));
-  clean_omap = true;
-}
-
 void ObjectCleanRegions::merge(const ObjectCleanRegions &other)
 {
   clean_offsets.intersection_of(other);
@@ -3434,6 +3428,34 @@ interval_set<uint64_t> ObjectCleanRegions::get_dirty_regions() const
 bool ObjectCleanRegions::omap_is_dirty() const
 {
   return !clean_omap;
+}
+
+void ObjectCleanRegions::encode(bufferlist &bl)
+{
+  ::encode(clean_offsets, bl);
+  ::encode(clean_omap, bl);
+}
+
+void ObjectCleanRegions::decode(bufferlist::iterator &bl)
+{
+  ::decode(clean_offsets, bl);
+  ::decode(clean_omap, bl);
+}
+
+void ObjectCleanRegions::dump(Formatter *f) const
+{
+  f->open_object_section("object_clean_regions");
+  f->dump_stream("clean_offsets") << clean_offsets;
+  f->dump_bool("clean_omap", clean_omap);
+  f->close_section();
+}
+
+void ObjectCleanRegions::generate_test_instances(list<ObjectCleanRegions*>& o)
+{
+  o.push_back(new ObjectCleanRegions());
+  o.push_back(new ObjectCleanRegions());
+  o.back()->mark_data_region_dirty(4096, 40960);
+  o.back()->mark_omap_dirty();
 }
 
 // -- pg_log_entry_t --
@@ -3491,8 +3513,7 @@ void pg_log_entry_t::encode(bufferlist &bl) const
   ::encode(user_version, bl);
   ::encode(mod_desc, bl);
   ::encode(extra_reqids, bl);
-  ::encode(unmodified_omap, bl);
-  ::encode(unmodified_extents, bl);
+  ::encode(clean_regions, bl);
   ENCODE_FINISH(bl);
 }
 
@@ -3549,11 +3570,10 @@ void pg_log_entry_t::decode(bufferlist::iterator &bl)
     ::decode(extra_reqids, bl);
 
   if (struct_v >= 11) {
-    ::decode(unmodified_omap, bl);
-    ::decode(unmodified_extents, bl);
+    ::decode(clean_regions, bl);
   } else {
-    unmodified_omap = false;
-    unmodified_extents.clear();
+    clean_regions->mark_data_region_dirty(0, (uint64_t - 1));
+    clean_regions->mark_omap_dirty();
   }
   DECODE_FINISH(bl);
 }
@@ -3597,8 +3617,9 @@ void pg_log_entry_t::dump(Formatter *f) const
     f->close_section();
   }
   {
-    f->dump_stream("unmodified_omap") << unmodified_omap;
-    f->dump_stream("unmodified_extents") << unmodified_extents;
+    f->open_object_section("clean_regions");
+    clean_regions.dump(f);
+    f->close_section();
   }
 }
 
@@ -3842,7 +3863,7 @@ void pg_missing_t::decode(bufferlist::iterator &bl, int64_t pool)
     // copy old item style to new style
     for (map<hobject_t, old_item, hobject_t::ComparatorWithDefault>::iterator i = tmp.begin();
 	 i != tmp.end(); ++i) {
-      missing[i->first] = item(i->second.need, i->second.have);
+      missing[i->first] = item(i->second.need, i->second.have, true);
     }
   } else {
     ::decode(missing, bl);
@@ -3963,7 +3984,7 @@ void pg_missing_t::add_next_event(const pg_log_entry_t& e)
       // new object.
       if (is_missing_divergent_item) {  // use iterator
         rmissing.erase((missing_it->second).need.version);
-        (missing_it->second).update(e);  // .have = nil
+        (missing_it->second).clean_regions.merge(e);  // .have = nil
         (missing_it->second).need = e.version;
         (missing_it->second).have = eversion_t();
       } else { // create new element in missing map
@@ -3974,7 +3995,7 @@ void pg_missing_t::add_next_event(const pg_log_entry_t& e)
       // already missing (prior).
       rmissing.erase((missing_it->second).need.version);
       (missing_it->second).need = e.version;  // leave .have unchanged.
-      (missing_it->second).update(e);
+      (missing_it->second).clean_regions.merge(e);
     } else if (e.is_backlog()) {
       // May not have prior version
       assert(0 == "these don't exist anymore");
@@ -3994,8 +4015,8 @@ void pg_missing_t::revise_need(hobject_t oid, eversion_t need)
   if (p != missing.end()) {
     rmissing.erase(p->second.need.version);
     p->second.need = need;            // no not adjust .have
-    p->second.unmodified_omap = false;
-    p->second.unmodified_extents.clear();
+    (missing_it->second).clean_regions.mark_data_region_dirty(0, (uint64_t - 1));
+    (missing_it->second).clean_regions.mark_omap_dirty();
   } else {
     missing[oid] = item(need, eversion_t());
   }
@@ -4007,8 +4028,8 @@ void pg_missing_t::revise_have(hobject_t oid, eversion_t have)
   std::map<hobject_t, pg_missing_t::item, hobject_t::ComparatorWithDefault>::iterator p = missing.find(oid);
   if (p != missing.end()) {
     (p->second).have = have;
-    (p->second).unmodified_omap = false;
-    (p->second).unmodified_extents.clear();
+    (missing_it->second).clean_regions.mark_data_region_dirty(0, (uint64_t - 1));
+    (missing_it->second).clean_regions.mark_omap_dirty();
   }
 }
 
