@@ -14128,8 +14128,7 @@ bool PrimaryLogPG::agent_choose_mode(bool restart, OpRequestRef op)
   // promote mode
   // TODO: add an pool config to control the promote slope
   float slope = 0.9;
-  uint64_t target_promote_micro = slope * 1000000;
-  if (full_micro > target_promote_micro)
+  if (full_micro > 1000000)
     promote_mode = TierAgentState::PROMOTE_MODE_FULL;
   else if (agent_state->promote_mode != TierAgentState::PROMOTE_MODE_WARMING ||
            full_micro >= slope * evict_target)
@@ -14149,17 +14148,21 @@ bool PrimaryLogPG::agent_choose_mode(bool restart, OpRequestRef op)
 
   if (hit_set && hit_set->impl->get_type() == HitSet::TYPE_TEMP) {
     uint64_t target_objects = UINT64_MAX;
+    uint32_t min_recency_for_promote = MAX(pool.info.min_read_recency_for_promote,
+      pool.info.min_write_recency_for_promote);
     if (pool.info.target_max_objects)
       target_objects = pool.info.target_max_objects / divisor;
-    if (pool.info.target_max_bytes && num_user_objects > 0) {
+    if (pool.info.target_max_bytes &&
+        num_user_objects > 0 &&
+        num_user_bytes > 0) {
       uint64_t target_objects_size = pool.info.target_max_bytes / divisor / \
-        (num_user_bytes / num_user_objects);
+        MAX(1, num_user_bytes / num_user_objects);
       target_objects = MIN(target_objects, target_objects_size);
     }
     TempHitSet* th = static_cast<TempHitSet*>(hit_set->impl.get());
     evict_temp = th->get_rank_temp(slope * evict_target * target_objects / 1000000);
     flush_temp = evict_temp;
-    promote_temp = MAX(1, evict_temp) * 2;
+    promote_temp = MAX(min_recency_for_promote, evict_temp * 2);
   }
 
   }

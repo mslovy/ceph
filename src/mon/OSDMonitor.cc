@@ -6132,6 +6132,13 @@ int OSDMonitor::prepare_command_pool_set(map<string,cmd_vartype> &cmdmap,
       return -EINVAL;
     }
     p.hit_set_period = n;
+    if (p.is_tier() && p.cache_mode ==  pg_pool_t::CACHEMODE_SWAP) {
+      const pg_pool_t *base_pool = osdmap.get_pg_pool(p.tier_of);
+      assert(base_pool);
+      pg_pool_t *nbp = pending_inc.get_new_pool(p.tier_of, base_pool);
+      nbp->hit_set_period = n;
+      ss <<"WARNING: automatically set hit_set_period in base pool! ";
+    }
   } else if (var == "hit_set_count") {
     if (interr.length()) {
       ss << "error parsing integer value '" << val << "': " << interr;
