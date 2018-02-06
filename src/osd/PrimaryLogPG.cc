@@ -9289,6 +9289,30 @@ void PrimaryLogPG::finish_promote(int r, CopyResults *results,
   }
   dout(20) << __func__ << " new_snapset " << tctx->new_snapset << dendl;
 
+  if (hit_set && hit_set->impl->get_type() == HitSet::TYPE_TEMP) {
+    TempHitSet* th = static_cast<TempHitSet*>(hit_set->impl.get());
+    th->set_temp(soid, results->temperature ? results->temperature : agent_state->promote_temp);
+  }
+
+  if (obc->obs.oi.soid.snap == CEPH_NOSNAP &&
+      pool.info.cache_mode == pg_pool_t::CACHEMODE_SWAP) {
+    // delete head object in tier_of and mark it dirty in cache tier to save space
+    tctx->new_obs.oi.set_flag(object_info_t::FLAG_DIRTY);
+    object_locator_t base_oloc(soid);
+    base_oloc.pool = pool.info.tier_of;
+    ObjectOperation o;
+    o.remove();
+    osd->objecter->mutate(
+      tctx->new_obs.oi.soid.oid,
+      base_oloc,
+      o,
+      obc->ssc->snapset.get_ssc_as_of(obc->ssc->snapset.seq),
+      ceph::real_clock::from_ceph_timespec(tctx->new_obs.oi.mtime),
+      (CEPH_OSD_FLAG_IGNORE_OVERLAY |
+       CEPH_OSD_FLAG_ENFORCE_SNAPC),
+      NULL /* no callback, we'll rely on the ordering w.r.t the next op */);
+  }
+
   // take RWWRITE lock for duration of our local write.  ignore starvation.
   if (!tctx->lock_manager.take_write_lock(
 	obc->obs.oi.soid,
@@ -9302,11 +9326,6 @@ void PrimaryLogPG::finish_promote(int r, CopyResults *results,
   simple_opc_submit(std::move(tctx));
 
   osd->logger->inc(l_osd_tier_promote);
-
-  if (hit_set && hit_set->impl->get_type() == HitSet::TYPE_TEMP) {
-    TempHitSet* th = static_cast<TempHitSet*>(hit_set->impl.get());
-    th->set_temp(soid, results->temperature ? results->temperature : agent_state->promote_temp);
-  }
 
   if (agent_state &&
       agent_state->is_idle())
@@ -13644,6 +13663,7 @@ bool PrimaryLogPG::agent_work(int start_max, int agent_flush_quota)
     }
 
     if (agent_state->evict_mode != TierAgentState::EVICT_MODE_IDLE &&
+        pool.info.cache_mode != pg_pool_t::CACHEMODE_SWAP &&
 	agent_maybe_evict(obc, false))
       ++started;
     else if (agent_state->flush_mode != TierAgentState::FLUSH_MODE_IDLE &&
