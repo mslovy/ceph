@@ -70,6 +70,7 @@ public:
    */
   struct CopyResults {
     ceph::real_time mtime; ///< the copy source's mtime
+    uint32_t temperature;        ///< the copy source's temperature
     uint64_t object_size; ///< the copied object's size
     bool started_temp_obj; ///< true if the callback needs to delete temp object
     hobject_t temp_oid;    ///< temp object (if any)
@@ -95,15 +96,11 @@ public:
     map<string, bufferlist> attrs; // xattrs
     uint64_t truncate_seq;
     uint64_t truncate_size;
-    interval_set<uint64_t> extents; // object logical extents map
     bool is_data_digest() {
       return flags & object_copy_data_t::FLAG_DATA_DIGEST;
     }
     bool is_omap_digest() {
       return flags & object_copy_data_t::FLAG_OMAP_DIGEST;
-    }
-    bool has_extents() {
-      return flags & object_copy_data_t::FLAG_EXTENTS;
     }
     CopyResults()
       : object_size(0), started_temp_obj(false),
@@ -203,12 +200,13 @@ public:
     version_t user_version;
     int data_offset;
     bool canceled;              ///< true if canceled
+    uint32_t temperature;
 
     ProxyReadOp(OpRequestRef _op, hobject_t oid, vector<OSDOp>& _ops)
       : op(_op), soid(oid),
         objecter_tid(0), ops(_ops),
 	user_version(0), data_offset(0),
-	canceled(false) { }
+	canceled(false), temperature(0) { }
   };
   typedef ceph::shared_ptr<ProxyReadOp> ProxyReadOpRef;
 
@@ -223,13 +221,14 @@ public:
     utime_t mtime;
     bool canceled;
     osd_reqid_t reqid;
+    uint32_t temperature;
 
     ProxyWriteOp(OpRequestRef _op, hobject_t oid, vector<OSDOp>& _ops, osd_reqid_t _reqid)
       : ctx(NULL), op(_op), soid(oid),
         objecter_tid(0), ops(_ops),
 	user_version(0), sent_reply(false),
 	canceled(false),
-        reqid(_reqid) { }
+        reqid(_reqid), temperature(0) { }
   };
   typedef ceph::shared_ptr<ProxyWriteOp> ProxyWriteOpRef;
 
@@ -243,10 +242,14 @@ public:
     bool blocking;              ///< whether we are blocking updates
     bool removal;               ///< we are removing the backend object
     boost::optional<std::function<void()>> on_flush; ///< callback, may be null
+    // for chunked object
+    map<uint64_t, int> io_results; 
+    map<uint64_t, ceph_tid_t> io_tids; 
+    uint64_t chunks;
 
     FlushOp()
       : flushed_version(0), objecter_tid(0), rval(0),
-	blocking(false), removal(false) {}
+	blocking(false), removal(false), chunks(0) {}
     ~FlushOp() { assert(!on_flush); }
   };
   typedef ceph::shared_ptr<FlushOp> FlushOpRef;
@@ -921,6 +924,7 @@ protected:
   void hit_set_setup();     ///< initialize HitSet state
   void hit_set_create();    ///< create a new HitSet
   void hit_set_persist();   ///< persist hit info
+  HitSetRef hit_set_load(hobject_t& oid); ///< load hitset by oid
   bool hit_set_apply_log(); ///< apply log entries to update in-memory HitSet
   void hit_set_trim(OpContextUPtr &ctx, unsigned max); ///< discard old HitSets
   void hit_set_in_memory_trim(uint32_t max_in_memory); ///< discard old in memory HitSets
@@ -1137,7 +1141,7 @@ protected:
   void write_update_size_and_usage(object_stat_sum_t& stats, object_info_t& oi,
 				   interval_set<uint64_t>& modified, uint64_t offset,
 				   uint64_t length, bool write_full=false);
-  void truncate_update_size_and_usage(
+  inline void truncate_update_size_and_usage(
     object_stat_sum_t& delta_stats,
     object_info_t& oi,
     uint64_t truncate_size);
@@ -1407,16 +1411,25 @@ protected:
 			   ObjectContextRef obc, bool write_ordered);
   void do_proxy_chunked_read(OpRequestRef op, ObjectContextRef obc, int op_index,
 			     uint64_t chunk_index, uint64_t req_offset, uint64_t req_length,
-			     uint64_t req_total_len);
+			     uint64_t req_total_len, bool write_ordered);
   bool can_proxy_chunked_read(OpRequestRef op, ObjectContextRef obc);
   void _copy_some_manifest(ObjectContextRef obc, CopyOpRef cop, uint64_t start_offset);
   void process_copy_chunk_manifest(hobject_t oid, ceph_tid_t tid, int r, uint64_t offset);
   void finish_promote_manifest(int r, CopyResults *results, ObjectContextRef obc);
   void cancel_and_requeue_proxy_ops(hobject_t oid);
+  int do_manifest_flush(OpRequestRef op, ObjectContextRef obc, FlushOpRef manifest_fop,
+			uint64_t start_offset, bool block);
+  int start_manifest_flush(OpRequestRef op, ObjectContextRef obc, bool blocking,
+			   boost::optional<std::function<void()>> &&on_flush);
+  void finish_manifest_flush(hobject_t oid, ceph_tid_t tid, int r, ObjectContextRef obc, 
+			     uint64_t last_offset);
+  void handle_manifest_flush(hobject_t oid, ceph_tid_t tid, int r,
+			     uint64_t offset, uint64_t last_offset);
 
   friend struct C_ProxyChunkRead;
   friend class PromoteManifestCallback;
   friend class C_CopyChunk;
+  friend struct C_ManifestFlush;
 
 public:
   PrimaryLogPG(OSDService *o, OSDMapRef curmap,

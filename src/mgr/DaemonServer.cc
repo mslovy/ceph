@@ -179,7 +179,7 @@ bool DaemonServer::ms_verify_authorizer(Connection *con,
       bufferlist::iterator p = caps_info.caps.begin();
       string str;
       try {
-	::decode(str, p);
+	decode(str, p);
       }
       catch (buffer::error& e) {
         is_valid = false;
@@ -410,6 +410,7 @@ bool DaemonServer::handle_report(MMgrReport *m)
     // themselves to be a daemon for some service.
     dout(4) << "rejecting report from non-daemon client " << m->daemon_name
 	    << dendl;
+    m->get_connection()->mark_down();
     m->put();
     return true;
   }
@@ -436,7 +437,7 @@ bool DaemonServer::handle_report(MMgrReport *m)
 
       } else if (key.first == "mds") {
         c->set_default("addr", stringify(m->get_source_addr()));
-        oss << "{\"prefix\": \"mds metadata\", \"role\": \""
+        oss << "{\"prefix\": \"mds metadata\", \"who\": \""
             << key.second << "\"}";
  
       } else {
@@ -1219,7 +1220,7 @@ bool DaemonServer::handle_command(MCommand *m)
 	  } else {
 	    auto workit = pg_map.pg_stat.find(parsed_pg);
 	    if (workit == pg_map.pg_stat.end()) {
-	      ss << "pg " << pstr << " not exists; ";
+	      ss << "pg " << pstr << " does not exist; ";
 	      r = -ENOENT;
 	    } else {
 	      pg_stat_t workpg = workit->second;
@@ -1427,7 +1428,7 @@ void DaemonServer::send_report()
 	_prune_pending_service_map();
 	if (pending_service_map_dirty >= pending_service_map.epoch) {
 	  pending_service_map.modified = ceph_clock_now();
-	  ::encode(pending_service_map, m->service_map_bl, CEPH_FEATURES_ALL);
+	  encode(pending_service_map, m->service_map_bl, CEPH_FEATURES_ALL);
 	  dout(10) << "sending service_map e" << pending_service_map.epoch
 		   << dendl;
 	  pending_service_map.epoch++;

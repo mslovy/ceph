@@ -9,7 +9,7 @@
 #include "include/stringify.h"
 #include <boost/algorithm/string.hpp>
 #include <boost/lexical_cast.hpp>
-#include <boost/regex.hpp>
+#include <regex>
 
 // Definitions for enums
 #include "common/perf_counters.h"
@@ -346,7 +346,9 @@ std::vector<Option> get_global_options() {
     .set_description("send critical error log lines to stderr"),
 
     Option("log_stderr_prefix", Option::TYPE_STR, Option::LEVEL_ADVANCED)
-    .set_description("String to prefix log messages with when sent to stderr"),
+    .set_description("String to prefix log messages with when sent to stderr")
+    .set_long_description("This is useful in container environments when combined with mon_cluster_log_to_stderr.  The mon log prefixes each line with the channel name (e.g., 'default', 'audit'), while log_stderr_prefix can be set to 'debug '.")
+    .add_see_also("mon_cluster_log_to_stderr"),
 
     Option("log_to_syslog", Option::TYPE_BOOL, Option::LEVEL_BASIC)
     .set_default(false)
@@ -432,7 +434,8 @@ std::vector<Option> get_global_options() {
 
     Option("mon_cluster_log_to_stderr", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
     .set_default(false)
-    .set_description("Send cluster log messages to stderr (prefixed by channel)"),
+    .set_description("Send cluster log messages to stderr (prefixed by channel)")
+    .add_see_also("log_stderr_prefix"),
 
     Option("mon_cluster_log_to_syslog", Option::TYPE_STR, Option::LEVEL_ADVANCED)
     .set_default("default=false")
@@ -761,6 +764,7 @@ std::vector<Option> get_global_options() {
 
     Option("ms_async_op_threads", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(3)
+    .set_min_max(1, 24)
     .set_description(""),
 
     Option("ms_async_max_op_threads", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
@@ -1330,6 +1334,11 @@ std::vector<Option> get_global_options() {
     .add_service("mon")
     .set_safe()
     .set_description("in which level of parent bucket the reporters are counted"),
+
+    Option("mon_osd_snap_trim_queue_warn_on", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(32768)
+    .set_description("Warn when snap trim queue is that large (or larger).")
+    .set_long_description("Warn when snap trim queue length for at least one PG crosses this value, as this is indicator of snap trimmer not keeping up, wasting disk space"),
 
     Option("mon_osd_force_trim_to", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(0)
@@ -2031,7 +2040,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_client_op_wgt", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(500.0)
@@ -2051,7 +2061,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_client_op_lim", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(0.0)
@@ -2071,7 +2082,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_osd_rep_op_res", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(1000.0)
@@ -2091,7 +2103,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_osd_rep_op_wgt", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(500.0)
@@ -2111,7 +2124,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_osd_rep_op_lim", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(0.0)
@@ -2131,7 +2145,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_snap_res", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(0.0)
@@ -2151,7 +2166,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_snap_wgt", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(1.0)
@@ -2171,7 +2187,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_snap_lim", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(0.001)
@@ -2191,7 +2208,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_recov_res", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(0.0)
@@ -2211,7 +2229,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_recov_wgt", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(1.0)
@@ -2231,7 +2250,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_recov_lim", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(0.001)
@@ -2251,7 +2271,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_wgt")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_scrub_res", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(0.0)
@@ -2271,7 +2292,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_wgt")
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_scrub_wgt", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(1.0)
@@ -2291,12 +2313,95 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_wgt")
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_scrub_lim", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(0.001)
     .set_description("mclock weight of limit requests")
     .set_long_description("mclock weight of limit requests when osd_op_queue is either 'mclock_opclass' or 'mclock_client'; higher values increase the limit")
+    .add_see_also("osd_op_queue")
+    .add_see_also("osd_op_queue_mclock_client_op_res")
+    .add_see_also("osd_op_queue_mclock_client_op_wgt")
+    .add_see_also("osd_op_queue_mclock_client_op_lim")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_res")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_wgt")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_lim")
+    .add_see_also("osd_op_queue_mclock_snap_res")
+    .add_see_also("osd_op_queue_mclock_snap_wgt")
+    .add_see_also("osd_op_queue_mclock_snap_lim")
+    .add_see_also("osd_op_queue_mclock_recov_res")
+    .add_see_also("osd_op_queue_mclock_recov_wgt")
+    .add_see_also("osd_op_queue_mclock_recov_lim")
+    .add_see_also("osd_op_queue_mclock_scrub_res")
+    .add_see_also("osd_op_queue_mclock_scrub_wgt")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
+
+    Option("osd_op_queue_mclock_anticipation_timeout", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(0.0)
+    .set_description("mclock anticipation timeout in seconds")
+    .set_long_description("the amount of time that mclock waits until the unused resource is forfeited")
+    .add_see_also("osd_op_queue")
+    .add_see_also("osd_op_queue_mclock_client_op_res")
+    .add_see_also("osd_op_queue_mclock_client_op_wgt")
+    .add_see_also("osd_op_queue_mclock_client_op_lim")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_res")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_wgt")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_lim")
+    .add_see_also("osd_op_queue_mclock_snap_res")
+    .add_see_also("osd_op_queue_mclock_snap_wgt")
+    .add_see_also("osd_op_queue_mclock_snap_lim")
+    .add_see_also("osd_op_queue_mclock_recov_res")
+    .add_see_also("osd_op_queue_mclock_recov_wgt")
+    .add_see_also("osd_op_queue_mclock_recov_lim")
+    .add_see_also("osd_op_queue_mclock_scrub_res")
+    .add_see_also("osd_op_queue_mclock_scrub_wgt")
+    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+
+    Option("osd_op_queue_mclock_pg_delete_res", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(0.0)
+    .set_description("mclock reservation of pg delete work")
+    .set_long_description("mclock reservation of pg delete work when osd_op_queue is either 'mclock_opclass' or 'mclock_client'; higher values increase the reservation")
+    .add_see_also("osd_op_queue")
+    .add_see_also("osd_op_queue_mclock_client_op_res")
+    .add_see_also("osd_op_queue_mclock_client_op_wgt")
+    .add_see_also("osd_op_queue_mclock_client_op_lim")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_res")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_wgt")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_lim")
+    .add_see_also("osd_op_queue_mclock_snap_res")
+    .add_see_also("osd_op_queue_mclock_snap_wgt")
+    .add_see_also("osd_op_queue_mclock_snap_lim")
+    .add_see_also("osd_op_queue_mclock_recov_res")
+    .add_see_also("osd_op_queue_mclock_recov_wgt")
+    .add_see_also("osd_op_queue_mclock_recov_lim")
+    .add_see_also("osd_op_queue_mclock_scrub_wgt")
+    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+
+    Option("osd_op_queue_mclock_pg_delete_wgt", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(1.0)
+    .set_description("mclock weight of pg delete work")
+    .set_long_description("mclock weight of pg delete work when osd_op_queue is either 'mclock_opclass' or 'mclock_client'; higher values increase the weight")
+    .add_see_also("osd_op_queue")
+    .add_see_also("osd_op_queue_mclock_client_op_res")
+    .add_see_also("osd_op_queue_mclock_client_op_wgt")
+    .add_see_also("osd_op_queue_mclock_client_op_lim")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_res")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_wgt")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_lim")
+    .add_see_also("osd_op_queue_mclock_snap_res")
+    .add_see_also("osd_op_queue_mclock_snap_wgt")
+    .add_see_also("osd_op_queue_mclock_snap_lim")
+    .add_see_also("osd_op_queue_mclock_recov_res")
+    .add_see_also("osd_op_queue_mclock_recov_wgt")
+    .add_see_also("osd_op_queue_mclock_recov_lim")
+    .add_see_also("osd_op_queue_mclock_scrub_res")
+    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+
+    Option("osd_op_queue_mclock_pg_delete_lim", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(0.001)
+    .set_description("mclock weight of pg delete work limit requests")
+    .set_long_description("mclock weight of limit pg delete work when osd_op_queue is either 'mclock_opclass' or 'mclock_client'; higher values increase the limit")
     .add_see_also("osd_op_queue")
     .add_see_also("osd_op_queue_mclock_client_op_res")
     .add_see_also("osd_op_queue_mclock_client_op_wgt")
@@ -2550,7 +2655,7 @@ std::vector<Option> get_global_options() {
     .set_description(""),
 
     Option("osd_recovery_max_omap_entries_per_chunk", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
-    .set_default(64000)
+    .set_default(8096)
     .set_description(""),
 
     Option("osd_copyfrom_max_chunk", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
@@ -3081,6 +3186,14 @@ std::vector<Option> get_global_options() {
     .set_description(""),
 
     Option("osd_snap_trim_cost", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
+    .set_default(1<<20)
+    .set_description(""),
+
+    Option("osd_pg_delete_priority", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
+    .set_default(5)
+    .set_description(""),
+
+    Option("osd_pg_delete_cost", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(1<<20)
     .set_description(""),
 
@@ -5617,14 +5730,14 @@ std::vector<Option> get_rgw_options() {
     .set_default(10_min)
     .set_description(""),
 
-    Option("rgw_bucket_info_cache_expiry_interval", Option::TYPE_UINT,
+    Option("rgw_cache_expiry_interval", Option::TYPE_UINT,
 	   Option::LEVEL_ADVANCED)
     .set_default(15_min)
-    .set_description("Number of seconds before entries in the bucket info "
-		     "cache are assumed stale and re-fetched. Zero is never.")
+    .set_description("Number of seconds before entries in the cache are "
+		     "assumed stale and re-fetched. Zero is never.")
     .add_tag("performance")
     .add_service("rgw")
-    .set_long_description("The Rados Gateway stores metadata about buckets in "
+    .set_long_description("The Rados Gateway stores metadata and objects in "
 			  "an internal cache. This should be kept consistent "
 			  "by the OSD's relaying notify events between "
 			  "multiple watching RGW processes. In the event "
@@ -5645,8 +5758,8 @@ static std::vector<Option> get_rbd_options() {
     .set_default("rbd")
     .set_description("default pool for storing new images")
     .set_validator([](std::string *value, std::string *error_message){
-      boost::regex pattern("^[^@/]+$");
-      if (!boost::regex_match (*value, pattern)) {
+      std::regex pattern("^[^@/]+$");
+      if (!std::regex_match (*value, pattern)) {
         *value = "rbd";
         *error_message = "invalid RBD default pool, resetting to 'rbd'";
       }
@@ -5657,8 +5770,8 @@ static std::vector<Option> get_rbd_options() {
     .set_default("")
     .set_description("default pool for storing data blocks for new images")
     .set_validator([](std::string *value, std::string *error_message){
-      boost::regex pattern("^[^@/]*$");
-      if (!boost::regex_match (*value, pattern)) {
+      std::regex pattern("^[^@/]*$");
+      if (!std::regex_match (*value, pattern)) {
         *value = "";
         *error_message = "ignoring invalid RBD data pool";
       }
@@ -5688,7 +5801,7 @@ static std::vector<Option> get_rbd_options() {
         {RBD_FEATURE_NAME_JOURNALING, RBD_FEATURE_JOURNALING},
         {RBD_FEATURE_NAME_DATA_POOL, RBD_FEATURE_DATA_POOL},
       };
-      static_assert((RBD_FEATURE_DATA_POOL << 1) > RBD_FEATURES_ALL,
+      static_assert((RBD_FEATURE_OPERATIONS << 1) > RBD_FEATURES_ALL,
                     "new RBD feature added");
 
       // convert user-friendly comma delimited feature name list to a bitmask
@@ -5706,6 +5819,15 @@ static std::vector<Option> get_rbd_options() {
           std::stringstream ss;
           ss << "ignoring unknown feature mask 0x"
              << std::hex << unsupported_features;
+          *error_message = ss.str();
+        }
+        uint64_t internal_features = (features & RBD_FEATURES_INTERNAL);
+        if (internal_features != 0ULL) {
+          features &= ~RBD_FEATURES_INTERNAL;
+
+          std::stringstream ss;
+          ss << "ignoring internal feature mask 0x"
+             << std::hex << internal_features;
           *error_message = ss.str();
         }
       } catch (const boost::bad_lexical_cast& ) {

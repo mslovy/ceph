@@ -10,7 +10,6 @@
 #include "common/utf8.h"
 #include "common/ceph_json.h"
 #include "common/safe_io.h"
-#include "common/backport_std.h"
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/utility/string_view.hpp>
@@ -159,7 +158,7 @@ int decode_attr_bl_single_value(map<string, bufferlist>& attrs, const char *attr
   }
   bufferlist::iterator bliter = bl.begin();
   try {
-    ::decode(*result, bliter);
+    decode(*result, bliter);
   } catch (buffer::error& err) {
     return -EIO;
   }
@@ -288,7 +287,7 @@ int RGWGetObj_ObjStore_S3::send_response_data(bufferlist& bl, off_t bl_ofs,
           content_type = iter->second.c_str();
         }
       } else if (strcmp(name, RGW_ATTR_SLO_UINDICATOR) == 0) {
-        // this attr has an extra length prefix from ::encode() in prior versions
+        // this attr has an extra length prefix from encode() in prior versions
         dump_header(s, "X-Object-Meta-Static-Large-Object", "True");
       } else if (strncmp(name, RGW_ATTR_META_PREFIX,
 			 sizeof(RGW_ATTR_META_PREFIX)-1) == 0) {
@@ -1424,14 +1423,14 @@ static inline int get_obj_attrs(RGWRados *store, struct req_state *s, rgw_obj& o
 static inline void set_attr(map<string, bufferlist>& attrs, const char* key, const std::string& value)
 {
   bufferlist bl;
-  ::encode(value,bl);
+  encode(value,bl);
   attrs.emplace(key, std::move(bl));
 }
 
 static inline void set_attr(map<string, bufferlist>& attrs, const char* key, const char* value)
 {
   bufferlist bl;
-  ::encode(value,bl);
+  encode(value,bl);
   attrs.emplace(key, std::move(bl));
 }
 
@@ -2133,6 +2132,7 @@ void RGWCopyObj_ObjStore_S3::send_partial_response(off_t ofs)
     dump_errno(s);
 
     end_header(s, this, "application/xml");
+    dump_start(s);
     if (op_ret == 0) {
       s->formatter->open_object_section_in_ns("CopyObjectResult", XMLNS_AWS_S3);
     }
@@ -4177,15 +4177,16 @@ rgw::auth::s3::LocalEngine::authenticate(
 
   const VersionAbstractor::server_signature_t server_signature = \
     signature_factory(cct, k.key, string_to_sign);
+  auto compare = signature.compare(server_signature);
 
   ldout(cct, 15) << "string_to_sign="
                  << rgw::crypt_sanitize::log_content{string_to_sign}
                  << dendl;
   ldout(cct, 15) << "server signature=" << server_signature << dendl;
   ldout(cct, 15) << "client signature=" << signature << dendl;
-  ldout(cct, 15) << "compare=" << signature.compare(server_signature) << dendl;
+  ldout(cct, 15) << "compare=" << compare << dendl;
 
-  if (static_cast<boost::string_view>(server_signature) != signature) {
+  if (compare != 0) {
     return result_t::deny(-ERR_SIGNATURE_NO_MATCH);
   }
 

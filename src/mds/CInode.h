@@ -492,19 +492,6 @@ public:
     else
       return NULL;
   }
-  sr_t *get_projected_srnode() {
-    if (num_projected_srnodes > 0) {
-      for (std::list<projected_inode_t*>::reverse_iterator p = projected_nodes.rbegin();
-	   p != projected_nodes.rend();
-	   ++p)
-	if ((*p)->snapnode)
-	  return (*p)->snapnode;
-    }
-    if (snaprealm)
-      return &snaprealm->srnode;
-    else
-      return NULL;
-  }
   void project_past_snaprealm_parent(SnapRealm *newparent);
 
 private:
@@ -604,26 +591,28 @@ protected:
     clear_flock_lock_state();
   }
   void _encode_file_locks(bufferlist& bl) const {
+    using ceph::encode;
     bool has_fcntl_locks = fcntl_locks && !fcntl_locks->empty();
-    ::encode(has_fcntl_locks, bl);
+    encode(has_fcntl_locks, bl);
     if (has_fcntl_locks)
-      ::encode(*fcntl_locks, bl);
+      encode(*fcntl_locks, bl);
     bool has_flock_locks = flock_locks && !flock_locks->empty();
-    ::encode(has_flock_locks, bl);
+    encode(has_flock_locks, bl);
     if (has_flock_locks)
-      ::encode(*flock_locks, bl);
+      encode(*flock_locks, bl);
   }
   void _decode_file_locks(bufferlist::iterator& p) {
+    using ceph::decode;
     bool has_fcntl_locks;
-    ::decode(has_fcntl_locks, p);
+    decode(has_fcntl_locks, p);
     if (has_fcntl_locks)
-      ::decode(*get_fcntl_lock_state(), p);
+      decode(*get_fcntl_lock_state(), p);
     else
       clear_fcntl_lock_state();
     bool has_flock_locks;
-    ::decode(has_flock_locks, p);
+    decode(has_flock_locks, p);
     if (has_flock_locks)
-      ::decode(*get_flock_lock_state(), p);
+      decode(*get_flock_lock_state(), p);
     else
       clear_flock_lock_state();
   }
@@ -638,6 +627,10 @@ public:
   elist<CInode*>::item item_dirty_dirfrag_nest;
   elist<CInode*>::item item_dirty_dirfrag_dirfragtree;
   elist<CInode*>::item item_scrub;
+
+  // also update RecoveryQueue::RecoveryQueue() if you change this
+  elist<CInode*>::item& item_recover_queue = item_dirty_dirfrag_dir;
+  elist<CInode*>::item& item_recover_queue_front = item_dirty_dirfrag_nest;
 
 public:
   int auth_pin_freeze_allowance;
@@ -809,14 +802,16 @@ public:
       replicate_relax_locks();
     
     __u32 nonce = add_replica(rep);
-    ::encode(nonce, bl);
+    using ceph::encode;
+    encode(nonce, bl);
     
     _encode_base(bl, features);
     _encode_locks_state_for_replica(bl, need_recover);
   }
   void decode_replica(bufferlist::iterator& p, bool is_new) {
+    using ceph::decode;
     __u32 nonce;
-    ::decode(nonce, p);
+    decode(nonce, p);
     replica_nonce = nonce;
     
     _decode_base(p);

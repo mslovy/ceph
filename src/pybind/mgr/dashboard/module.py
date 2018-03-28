@@ -37,6 +37,7 @@ import rbd_iscsi
 import rbd_mirroring
 from rbd_ls import RbdLs, RbdPoolLs
 from cephfs_clients import CephFSClients
+from rgw import RGWDaemons
 
 log = logging.getLogger("dashboard")
 
@@ -65,7 +66,9 @@ def recurse_refs(root, path):
 def get_prefixed_url(url):
     return global_instance().url_prefix + url
 
-
+def to_sorted_array(data):
+    assert isinstance(data, dict)
+    return sorted(data.iteritems())
 
 class StandbyModule(MgrStandbyModule):
     def serve(self):
@@ -142,6 +145,9 @@ class Module(MgrModule):
         # Stateful instances of CephFSClients, hold cached results.  Key to
         # dict is FSCID
         self.cephfs_clients = {}
+         
+        # Stateful instance of RGW
+        self.rgw_daemons = RGWDaemons(self)
 
         # A short history of pool df stats
         self.pool_stats = defaultdict(lambda: defaultdict(
@@ -768,6 +774,48 @@ class Module(MgrModule):
                     content_data=json.dumps(self._servers(), indent=2)
                 )
 
+            @cherrypy.expose
+            def monitors(self):
+                template = env.get_template("monitors.html")
+                return template.render(
+                    url_prefix = global_instance().url_prefix,
+                    ceph_version=global_instance().version,
+                    path_info=cherrypy.request.path_info,
+                    toplevel_data=json.dumps(self._toplevel_data(), indent=2),
+                    content_data=json.dumps(self._monitors(), indent=2)
+                )
+
+            @cherrypy.expose
+            @cherrypy.tools.json_out()
+            def monitors_data(self):
+                return self._monitors
+
+            def _monitors(self):
+                in_quorum, out_quorum = [], []
+
+                counters = [ 'mon.num_sessions'
+                ]
+
+                mon_status = global_instance().get_sync_object(MonStatus).data
+                for mon in mon_status["monmap"]["mons"]:
+                    mon["stats"] = {}
+                    for counter in counters:
+                        data = global_instance().get_counter("mon", mon["name"], counter)
+                        if data is not None:
+                            mon["stats"][counter.split(".")[1]] = data[counter] 
+                        else:
+                            mon["stats"][counter.split(".")[1]] = []
+                    if mon["rank"] in mon_status["quorum"]:
+                        in_quorum.append(mon)
+                    else:
+                        out_quorum.append(mon)
+                    
+                return {
+                    'mon_status': mon_status,
+                    'in_quorum' : in_quorum,
+                    'out_quorum': out_quorum,                
+                }
+            
             def _servers(self):
                 return {
                     'servers': global_instance().list_servers()
@@ -993,7 +1041,7 @@ class Module(MgrModule):
                     global_instance().log.error("Failed to load histogram for OSD {}".format(osd_id))
                 else:
                     histogram = json.loads(outb)
-
+		# TODO(chang liu): use to_sorted_array to simpify javascript code
                 return {
                     "osd": osd,
                     "osd_metadata": osd_metadata,
@@ -1113,8 +1161,76 @@ class Module(MgrModule):
                     content_data=json.dumps(content_data, indent=2)
                 )
 
+        @cherrypy.popargs('rgw_id')
+        class RGWEndpoint(EndPoint):
+
+            @cherrypy.expose
+            def index(self, rgw_id=None):
+                if rgw_id is not None:
+		    template = env.get_template("rgw_detail.html")
+		    toplevel_data = self._toplevel_data()
+		    return template.render(
+			    url_prefix=global_instance().url_prefix,
+			    ceph_version=global_instance().version,
+			    path_info='/rgw' + cherrypy.request.path_info,
+			    toplevel_data=json.dumps(toplevel_data, indent=2),
+			    content_data=json.dumps(self.rgw_data(rgw_id), indent=2)
+			)
+                else:
+
+		    """ List all RGW servers """
+
+		    template = env.get_template("rgw.html")
+		    toplevel_data = self._toplevel_data()
+
+		    content_data = self._rgw_daemons()
+
+		    return template.render(
+			url_prefix = global_instance().url_prefix,
+			ceph_version=global_instance().version,
+			path_info='/rgw' + cherrypy.request.path_info,
+			toplevel_data=json.dumps(toplevel_data, indent=2),
+			content_data=json.dumps(content_data, indent=2)
+		    )
+            
+            def _rgw_daemons(self):
+                status, data = global_instance().rgw_daemons.get()
+                if data is None:
+                    log.warning("Failed to get RGW status")
+                    return {}
+                return data
+
+            @cherrypy.expose
+            @cherrypy.tools.json_out()
+            def rgw_daemons_data(self):
+                return self._rgw_daemons()
+           
+            def _rgw(self, rgw_id):
+                daemons = self.rgw_daemons_data()
+                rgw_metadata = {}
+                rgw_status = {}
+
+                for daemon in daemons["daemons"]:
+                    if daemon["id"] != rgw_id:
+                        continue
+                    
+                    rgw_metadata = daemon["metadata"]
+                    rgw_status = daemon["status"]
+
+                return {
+                    "rgw_id": rgw_id,
+                    "rgw_metadata": to_sorted_array(rgw_metadata),
+                    "rgw_status": to_sorted_array(rgw_status),
+                }
+              
+            @cherrypy.expose
+            @cherrypy.tools.json_out()
+            def rgw_data(self, rgw_id):
+	        return self._rgw(rgw_id)
+
         cherrypy.tree.mount(Root(), get_prefixed_url("/"), conf)
         cherrypy.tree.mount(OSDEndpoint(), get_prefixed_url("/osd"), conf)
+        cherrypy.tree.mount(RGWEndpoint(), get_prefixed_url("/rgw"), conf)
 
         log.info("Starting engine on {0}:{1}...".format(
             server_addr, server_port))

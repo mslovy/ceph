@@ -290,6 +290,12 @@ which are as follows:
 :command:`data sync run`
   Run data sync for the specified source zone.
 
+:command:`sync error list`
+  list sync error.
+
+:command:`sync error trim`
+  trim sync error.
+
 :command:`zone rename`
   Rename a zone.
 
@@ -520,10 +526,6 @@ Options
 .. option:: --display-name=<name>
 
    The display name of the user.
-
-.. option:: --max-buckets
-
-   Maximum number of buckets for a user.
 
 .. option:: --admin
 

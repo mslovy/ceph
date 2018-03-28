@@ -28,6 +28,7 @@ set(librbd_internal_srcs
   api/Group.cc
   api/Image.cc
   api/Mirror.cc
+  api/Snapshot.cc
   cache/ImageWriteback.cc
   cache/PassthroughImageCache.cc
   deep_copy/ImageCopyRequest.cc
@@ -146,6 +147,10 @@ target_link_libraries(librbd PRIVATE
 if(HAVE_UDEV)
   target_link_libraries(librbd PRIVATE
     udev)
+endif()
+if(WITH_STATIC_LIBSTDCXX)
+  target_link_libraries(librbd INTERFACE
+    "-static-libstdc++ -static-libgcc")
 endif()
 if(ENABLE_SHARED)
   set_target_properties(librbd PROPERTIES

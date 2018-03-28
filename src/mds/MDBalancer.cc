@@ -447,7 +447,7 @@ double MDBalancer::try_match(balance_state_t& state, mds_rank_t ex, double& maxe
 {
   if (maxex <= 0 || maxim <= 0) return 0.0;
 
-  double howmuch = MIN(maxex, maxim);
+  double howmuch = std::min(maxex, maxim);
   if (howmuch <= 0) return 0.0;
 
   dout(5) << "   - mds." << ex << " exports " << howmuch << " to mds." << im << dendl;
@@ -1269,11 +1269,9 @@ int MDBalancer::dump_loads(Formatter *f)
     CDir *dir = dfs.front();
     dfs.pop_front();
 
-    if (f) {
-      f->open_object_section("dir");
-      dir->dump_load(f, now, decayrate);
-      f->close_section();
-    }
+    f->open_object_section("dir");
+    dir->dump_load(f, now, decayrate);
+    f->close_section();
 
     for (CDir::map_t::iterator it = dir->begin(); it != dir->end(); ++it) {
       CInode *in = it->second->get_linkage()->get_inode();
@@ -1294,7 +1292,7 @@ int MDBalancer::dump_loads(Formatter *f)
   f->open_object_section("mds_load");
   {
 
-    auto dump_mds_load = [this, f, now](mds_load_t& load) {
+    auto dump_mds_load = [f, now](mds_load_t& load) {
       f->dump_float("request_rate", load.req_rate);
       f->dump_float("cache_hit_rate", load.cache_hit_rate);
       f->dump_float("queue_length", load.queue_len);

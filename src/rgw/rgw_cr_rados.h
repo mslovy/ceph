@@ -256,7 +256,7 @@ int RGWSimpleRadosReadCR<T>::request_complete()
         // exist
         *result = T();
       } else {
-        ::decode(*result, iter);
+        decode(*result, iter);
       }
     } catch (buffer::error& err) {
       return -EIO;
@@ -319,7 +319,7 @@ public:
 		      const T& _data, RGWObjVersionTracker *objv_tracker = nullptr)
     : RGWSimpleCoroutine(_store->ctx()), async_rados(_async_rados),
       store(_store), obj(_obj), objv_tracker(objv_tracker) {
-    ::encode(_data, bl);
+    encode(_data, bl);
   }
 
   ~RGWSimpleRadosWriteCR() override {
@@ -410,10 +410,9 @@ class RGWRadosGetOmapKeysCR : public RGWSimpleCoroutine {
   RGWRados *store;
 
   string marker;
-  map<string, bufferlist> *entries;
+  std::set<std::string> *entries;
   int max_entries;
 
-  int rval;
   rgw_rados_ref ref;
 
   rgw_raw_obj obj;
@@ -424,13 +423,10 @@ public:
   RGWRadosGetOmapKeysCR(RGWRados *_store,
 		      const rgw_raw_obj& _obj,
 		      const string& _marker,
-		      map<string, bufferlist> *_entries, int _max_entries);
+		      std::set<std::string> *_entries, int _max_entries);
 
   int send_request() override;
-
-  int request_complete() override {
-    return rval;
-  }
+  int request_complete() override;
 };
 
 class RGWRadosRemoveOmapKeysCR : public RGWSimpleCoroutine {

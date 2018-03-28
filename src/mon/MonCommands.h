@@ -291,7 +291,7 @@ COMMAND("fs dump "
 COMMAND_WITH_FLAG("mds getmap " \
 	"name=epoch,type=CephInt,req=false,range=0", \
 	"get MDS map, optionally from epoch", "mds", "r", "cli,rest", FLAG(OBSOLETE))
-COMMAND("mds metadata name=role,type=CephString,req=false",
+COMMAND("mds metadata name=who,type=CephString,req=false",
 	"fetch metadata for mds <role>",
 	"mds", "r", "cli,rest")
 COMMAND("mds count-metadata name=property,type=CephString",
@@ -453,6 +453,11 @@ COMMAND("osd tree " \
 	"name=epoch,type=CephInt,range=0,req=false " \
 	"name=states,type=CephChoices,strings=up|down|in|out|destroyed,n=N,req=false", \
 	"print OSD tree", "osd", "r", "cli,rest")
+COMMAND("osd tree-from " \
+	"name=epoch,type=CephInt,range=0,req=false " \
+	"name=bucket,type=CephString " \
+	"name=states,type=CephChoices,strings=up|down|in|out|destroyed,n=N,req=false", \
+	"print OSD tree in bucket", "osd", "r", "cli,rest")
 COMMAND("osd ls " \
 	"name=epoch,type=CephInt,range=0,req=false", \
 	"show all OSD ids", "osd", "r", "cli,rest")
@@ -1001,7 +1006,7 @@ COMMAND("osd tier rm " \
 	"osd", "rw", "cli,rest")
 COMMAND("osd tier cache-mode " \
 	"name=pool,type=CephPoolname " \
-	"name=mode,type=CephChoices,strings=none|writeback|forward|readonly|readforward|proxy|readproxy " \
+	"name=mode,type=CephChoices,strings=none|writeback|forward|readonly|readforward|proxy|readproxy|swap " \
 	"name=sure,type=CephChoices,strings=--yes-i-really-mean-it,req=false", \
 	"specify the caching mode for cache tier <pool>", "osd", "rw", "cli,rest")
 COMMAND("osd tier set-overlay " \

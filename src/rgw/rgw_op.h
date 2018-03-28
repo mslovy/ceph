@@ -920,17 +920,17 @@ struct rgw_slo_entry {
 
   void encode(bufferlist& bl) const {
     ENCODE_START(1, 1, bl);
-    ::encode(path, bl);
-    ::encode(etag, bl);
-    ::encode(size_bytes, bl);
+    encode(path, bl);
+    encode(etag, bl);
+    encode(size_bytes, bl);
     ENCODE_FINISH(bl);
   }
 
   void decode(bufferlist::iterator& bl) {
      DECODE_START(1, bl);
-     ::decode(path, bl);
-     ::decode(etag, bl);
-     ::decode(size_bytes, bl);
+     decode(path, bl);
+     decode(etag, bl);
+     decode(size_bytes, bl);
      DECODE_FINISH(bl);
   }
 
@@ -953,15 +953,15 @@ struct RGWSLOInfo {
 
   void encode(bufferlist& bl) const {
     ENCODE_START(1, 1, bl);
-    ::encode(entries, bl);
-    ::encode(total_size, bl);
+    encode(entries, bl);
+    encode(total_size, bl);
     ENCODE_FINISH(bl);
   }
 
   void decode(bufferlist::iterator& bl) {
      DECODE_START(1, bl);
-     ::decode(entries, bl);
-     ::decode(total_size, bl);
+     decode(entries, bl);
+     decode(total_size, bl);
      DECODE_FINISH(bl);
   }
 };
@@ -1208,7 +1208,6 @@ public:
 class RGWPutMetadataObject : public RGWOp {
 protected:
   RGWAccessControlPolicy policy;
-  string placement_rule;
   boost::optional<ceph::real_time> delete_at;
   const char *dlo_manifest;
 
@@ -2000,7 +1999,7 @@ static inline void encode_delete_at_attr(boost::optional<ceph::real_time> delete
   } 
 
   bufferlist delatbl;
-  ::encode(*delete_at, delatbl);
+  encode(*delete_at, delatbl);
   attrs[RGW_ATTR_DELETE_AT] = delatbl;
 } /* encode_delete_at_attr */
 
@@ -2039,7 +2038,7 @@ static inline void complete_etag(MD5& hash, string *etag)
   char etag_buf[CEPH_CRYPTO_MD5_DIGESTSIZE];
   char etag_buf_str[CEPH_CRYPTO_MD5_DIGESTSIZE * 2 + 16];
 
-  hash.Final((byte *)etag_buf);
+  hash.Final((::byte *)etag_buf);
   buf_to_hex((const unsigned char *)etag_buf, CEPH_CRYPTO_MD5_DIGESTSIZE,
 	    etag_buf_str);
 

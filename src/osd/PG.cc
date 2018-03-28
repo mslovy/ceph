@@ -227,9 +227,10 @@ void PG::dump_live_ids()
 void PGPool::update(CephContext *cct, OSDMapRef map)
 {
   const pg_pool_t *pi = map->get_pg_pool(id);
-  assert(pi);
+  if (!pi) {
+    return; // pool has been deleted
+  }
   info = *pi;
-  auid = pi->auid;
   name = map->get_pool_name(id);
 
   bool updated = false;
@@ -318,7 +319,7 @@ PG::PG(OSDService *o, OSDMapRef curmap,
     cct,
     &osdriver,
     p.ps(),
-    p.get_split_bits(curmap->get_pg_num(_pool.id)),
+    p.get_split_bits(_pool.info.get_pg_num()),
     _pool.id,
     p.shard),
   last_persisted_osdmap_ref(curmap),
@@ -1237,10 +1238,11 @@ void PG::calc_replicated_acting(
   set<pg_shard_t> *acting_backfill,
   ostream &ss)
 {
-  ss << "calc_acting newest update on osd." << auth_log_shard->first
+  pg_shard_t auth_log_shard_id = auth_log_shard->first;
+
+  ss << __func__ << " newest update on osd." << auth_log_shard_id
      << " with " << auth_log_shard->second
      << (restrict_to_up_acting ? " restrict_to_up_acting" : "") << std::endl;
-  pg_shard_t auth_log_shard_id = auth_log_shard->first;
   
   // select primary
   map<pg_shard_t,pg_info_t>::const_iterator primary = all_info.find(up_primary);
@@ -1256,7 +1258,7 @@ void PG::calc_replicated_acting(
     primary = auth_log_shard;
   }
 
-  ss << "calc_acting primary is osd." << primary->first
+  ss << __func__ << " primary is osd." << primary->first
      << " with " << primary->second << std::endl;
   want->push_back(primary->first.osd);
   acting_backfill->insert(primary->first);
@@ -1418,10 +1420,12 @@ bool PG::choose_acting(pg_shard_t &auth_log_shard_id,
   map<pg_shard_t, pg_info_t> all_info(peer_info.begin(), peer_info.end());
   all_info[pg_whoami] = info;
 
-  for (map<pg_shard_t, pg_info_t>::iterator p = all_info.begin();
-       p != all_info.end();
-       ++p) {
-    dout(10) << "calc_acting osd." << p->first << " " << p->second << dendl;
+  if (cct->_conf->subsys.should_gather(dout_subsys, 10)) {
+    for (map<pg_shard_t, pg_info_t>::iterator p = all_info.begin();
+         p != all_info.end();
+         ++p) {
+      dout(10) << __func__ << "all_info osd." << p->first << " " << p->second << dendl;
+    }
   }
 
   map<pg_shard_t, pg_info_t>::const_iterator auth_log_shard =
@@ -1429,13 +1433,13 @@ bool PG::choose_acting(pg_shard_t &auth_log_shard_id,
 
   if (auth_log_shard == all_info.end()) {
     if (up != acting) {
-      dout(10) << "choose_acting no suitable info found (incomplete backfills?),"
+      dout(10) << __func__ << " no suitable info found (incomplete backfills?),"
 	       << " reverting to up" << dendl;
       want_acting = up;
       vector<int> empty;
       osd->queue_want_pg_temp(info.pgid.pgid, empty);
     } else {
-      dout(10) << "choose_acting failed" << dendl;
+      dout(10) << __func__ << " failed" << dendl;
       assert(want_acting.empty());
     }
     return false;
@@ -1493,7 +1497,7 @@ bool PG::choose_acting(pg_shard_t &auth_log_shard_id,
       (pool.info.is_erasure() ||
        !cct->_conf->osd_allow_recovery_below_min_size)) {
     want_acting.clear();
-    dout(10) << "choose_acting failed, below min size" << dendl;
+    dout(10) << __func__ << " failed, below min size" << dendl;
     return false;
   }
 
@@ -1502,12 +1506,12 @@ bool PG::choose_acting(pg_shard_t &auth_log_shard_id,
     get_pgbackend()->get_is_recoverable_predicate());
   if (!(*recoverable_predicate)(have)) {
     want_acting.clear();
-    dout(10) << "choose_acting failed, not recoverable" << dendl;
+    dout(10) << __func__ << " failed, not recoverable" << dendl;
     return false;
   }
 
   if (want != acting) {
-    dout(10) << "choose_acting want " << want << " != acting " << acting
+    dout(10) << __func__ << " want " << want << " != acting " << acting
 	     << ", requesting pg_temp change" << dendl;
     want_acting = want;
 
@@ -1536,7 +1540,7 @@ bool PG::choose_acting(pg_shard_t &auth_log_shard_id,
       ++i) {
     assert(stray_set.find(*i) == stray_set.end());
   }
-  dout(10) << "choose_acting want " << want << " (== acting) backfill_targets " 
+  dout(10) << __func__ << " want " << want << " (== acting) backfill_targets "
 	   << want_backfill << dendl;
   return true;
 }
@@ -1882,14 +1886,13 @@ void PG::activate(ObjectStore::Transaction& t,
 
       build_might_have_unfound();
 
-      state_set(PG_STATE_DEGRADED);
       if (have_unfound())
 	discover_all_missing(query_map);
     }
 
-    // degraded?
+    // num_objects_degraded if calculated should reflect this too, unless no
+    // missing and we are about to go clean.
     if (get_osdmap()->get_pg_size(info.pgid.pgid) > actingset.size()) {
-      state_set(PG_STATE_DEGRADED);
       state_set(PG_STATE_UNDERSIZED);
     }
 
@@ -1924,7 +1927,7 @@ bool PG::op_has_sufficient_caps(OpRequestRef& op)
     req->get_hobj().get_key();
 
   bool cap = caps.is_capable(pool.name, req->get_hobj().nspace,
-                             pool.auid,
+                             pool.info.auid,
 			     pool.info.application_metadata,
 			     key,
 			     op->need_read_cap(),
@@ -1935,7 +1938,7 @@ bool PG::op_has_sufficient_caps(OpRequestRef& op)
            << "session=" << session
            << " pool=" << pool.id << " (" << pool.name
            << " " << req->get_hobj().nspace
-	   << ") owner=" << pool.auid
+	   << ") owner=" << pool.info.auid
 	   << " pool_app_metadata=" << pool.info.application_metadata
 	   << " need_read_cap=" << op->need_read_cap()
 	   << " need_write_cap=" << op->need_write_cap()
@@ -2011,6 +2014,14 @@ void PG::all_activated_and_committed()
   assert(peer_activated.size() == actingbackfill.size());
   assert(!actingbackfill.empty());
   assert(blocked_by.empty());
+
+  // Degraded?
+  _update_calc_stats();
+  if (info.stats.stats.sum.num_objects_degraded) {
+    state_set(PG_STATE_DEGRADED);
+  } else {
+    state_clear(PG_STATE_DEGRADED);
+  }
 
   queue_peering_event(
     PGPeeringEventRef(
@@ -2100,7 +2111,7 @@ bool PG::set_force_recovery(bool b)
   if (!deleting) {
     if (b) {
       if (!(state & PG_STATE_FORCED_RECOVERY) &&
-	  (state & (PG_STATE_DEGRADED |
+	  (state & (PG_STATE_DEGRADED |		// XXX: Will this check be messed up?
 		    PG_STATE_RECOVERY_WAIT |
 		    PG_STATE_RECOVERING))) {
 	dout(20) << __func__ << " set" << dendl;
@@ -2126,7 +2137,7 @@ bool PG::set_force_backfill(bool b)
   if (!deleting) {
     if (b) {
       if (!(state & PG_STATE_FORCED_RECOVERY) &&
-	  (state & (PG_STATE_DEGRADED |
+	  (state & (PG_STATE_DEGRADED |		// XXX: Will this check be messed up?
 		    PG_STATE_BACKFILL_WAIT |
 		    PG_STATE_BACKFILLING))) {
 	dout(10) << __func__ << " set" << dendl;
@@ -2204,6 +2215,19 @@ unsigned PG::get_backfill_priority()
   }
 
   return static_cast<unsigned>(ret);
+}
+
+unsigned PG::get_delete_priority()
+{
+  auto state = get_osdmap()->get_state(osd->whoami);
+  if (state & (CEPH_OSD_NEARFULL |
+	       CEPH_OSD_FULL)) {
+    return OSD_DELETE_PRIORITY_FULL;
+  } else if (state & CEPH_OSD_BACKFILLFULL) {
+    return OSD_DELETE_PRIORITY_FULLISH;
+  } else {
+    return OSD_DELETE_PRIORITY_NORMAL;
+  }
 }
 
 void PG::finish_recovery(list<Context*>& tfin)
@@ -2667,132 +2691,150 @@ void PG::_update_calc_stats()
   info.stats.ondisk_log_size = info.stats.log_size;
   info.stats.log_start = pg_log.get_tail();
   info.stats.ondisk_log_start = pg_log.get_tail();
+  info.stats.snaptrimq_len = snap_trimq.size();
 
-  // If actingset is larger then upset we will have misplaced,
-  // so we will report based on actingset size.
+  unsigned num_shards = get_osdmap()->get_pg_size(info.pgid.pgid);
 
-  // If upset is larger then we will have degraded,
-  // so we will report based on upset size.
-
-  // If target is the largest of them all, it will contribute to
-  // the degraded count because num_object_copies is
-  // computed using target and eventual used to get degraded total.
-
-  unsigned target = get_osdmap()->get_pg_size(info.pgid.pgid);
-  unsigned nrep = MAX(actingset.size(), upset.size());
+  // In rare case that upset is too large (usually transient), use as target
+  // for calculations below.
+  unsigned target = std::max(num_shards, (unsigned)upset.size());
+  // Not sure this could ever happen, that actingset > upset
+  // which only matters if actingset > num_shards.
+  unsigned nrep = std::max(actingset.size(), upset.size());
   // calc num_object_copies
-  info.stats.stats.calc_copies(MAX(target, nrep));
+  info.stats.stats.calc_copies(std::max(target, nrep));
   info.stats.stats.sum.num_objects_degraded = 0;
   info.stats.stats.sum.num_objects_unfound = 0;
   info.stats.stats.sum.num_objects_misplaced = 0;
-  if ((is_degraded() || is_undersized() || !is_clean()) && is_peered()) {
-    // NOTE: we only generate copies, degraded, misplaced and unfound
+  if ((is_remapped() || is_undersized() || !is_clean()) && (is_peered() || is_activating())) {
+    dout(20) << __func__ << " actingset " << actingset << " upset "
+             << upset << " actingbackfill " << actingbackfill << dendl;
+    dout(20) << __func__ << " acting " << acting << " up " << up << dendl;
+
+    assert(!actingbackfill.empty());
+
+    // NOTE: we only generate degraded, misplaced and unfound
     // values for the summation, not individual stat categories.
     int64_t num_objects = info.stats.stats.sum.num_objects;
 
-    // Objects that have arrived backfilled to up OSDs (not in acting)
-    int64_t backfilled = 0;
+    // Objects missing from up nodes, sorted by # objects.
+    boost::container::flat_set<pair<int64_t,pg_shard_t>> missing_target_objects;
+    // Objects missing from nodes not in up, sort by # objects
+    boost::container::flat_set<pair<int64_t,pg_shard_t>> acting_source_objects;
+
+    int64_t missing;
+
+    // Primary first
+    missing = pg_log.get_missing().num_missing();
+    assert(actingbackfill.count(pg_whoami));
+    if (upset.count(pg_whoami)) {
+      missing_target_objects.insert(make_pair(missing, pg_whoami));
+    } else {
+      acting_source_objects.insert(make_pair(missing, pg_whoami));
+    }
+    info.stats.stats.sum.num_objects_missing_on_primary = missing;
+
+    // All other peers
+    for (auto& peer : peer_info) {
+      // Ignore other peers until we add code to look at detailed missing
+      // information. (recovery)
+      if (!actingbackfill.count(peer.first)) {
+	continue;
+      }
+      missing = 0;
+      // Backfill targets always track num_objects accurately
+      // all other peers track missing accurately.
+      if (is_backfill_targets(peer.first)) {
+	missing = std::max((int64_t)0, num_objects - peer.second.stats.stats.sum.num_objects);
+      } else {
+	if (peer_missing.count(peer.first)) {
+	  missing = peer_missing[peer.first].num_missing();
+	} else {
+	  dout(20) << __func__ << " no peer_missing found for " << peer.first << dendl;
+        }
+      }
+      if (upset.count(peer.first)) {
+	missing_target_objects.insert(make_pair(missing, peer.first));
+      } else {
+	acting_source_objects.insert(make_pair(missing, peer.first));
+      }
+      peer.second.stats.stats.sum.num_objects_missing = missing;
+    }
+
+    if (pool.info.is_replicated()) {
+      // Add to missing_target_objects up to target elements (num_objects missing)
+      assert(target >= missing_target_objects.size());
+      unsigned needed = target - missing_target_objects.size();
+      for (; needed; --needed)
+	missing_target_objects.insert(make_pair(num_objects, pg_shard_t(pg_shard_t::NO_OSD)));
+    } else {
+      for (unsigned i = 0 ; i < num_shards; ++i) {
+        shard_id_t shard(i);
+	bool found = false;
+	for (const auto& t : missing_target_objects) {
+	  if (std::get<1>(t).shard == shard) {
+	    found = true;
+	    break;
+	  }
+	}
+	if (!found)
+	  missing_target_objects.insert(make_pair(num_objects, pg_shard_t(pg_shard_t::NO_OSD,shard)));
+      }
+    }
+
+    for (const auto& item : missing_target_objects)
+      dout(20) << __func__ << " missing shard " << std::get<1>(item) << " missing= " << std::get<0>(item) << dendl;
+    for (const auto& item : acting_source_objects)
+      dout(20) << __func__ << " acting shard " << std::get<1>(item) << " missing= " << std::get<0>(item) << dendl;
+
     // A misplaced object is not stored on the correct OSD
     int64_t misplaced = 0;
-    // Total of object copies/shards found
-    int64_t object_copies = 0;
-    // Total number of OSDs with misplaced objects
-    int num_misplaced = 0;
+    // a degraded objects has fewer replicas or EC shards than the pool specifies.
+    int64_t degraded = 0;
 
-    // num_objects_missing on each peer
-    for (map<pg_shard_t, pg_info_t>::iterator pi =
-        peer_info.begin();
-        pi != peer_info.end();
-        ++pi) {
-      map<pg_shard_t, pg_missing_t>::const_iterator pm =
-        peer_missing.find(pi->first);
-      if (pm != peer_missing.end()) {
-        pi->second.stats.stats.sum.num_objects_missing =
-          pm->second.num_missing();
-      }
-    }
+    for (auto m = missing_target_objects.rbegin();
+        m != missing_target_objects.rend(); ++m) {
 
-    // Add recovery objects not part of actingbackfill to be used to reduce
-    // degraded and account as misplaced.
-    for (const auto& peer : peer_info) {
-      if (actingbackfill.find(peer.first) == actingbackfill.end()) {
-	object_copies += peer.second.stats.stats.sum.num_objects;
-	misplaced += peer.second.stats.stats.sum.num_objects;
-	++num_misplaced;
-      }
-    }
-    if (object_copies)
-      dout(20) << __func__ << " objects not part of up/acting " << object_copies << dendl;
+      int64_t extra_missing = -1;
 
-    // Objects backfilled, sorted by # objects.
-    set<pair<int64_t,pg_shard_t>> backfill_target_objects;
-
-    assert(!actingbackfill.empty());
-    for (set<pg_shard_t>::iterator i = actingbackfill.begin();
-	 i != actingbackfill.end();
-	 ++i) {
-      const pg_shard_t &p = *i;
-      bool in_up = (upset.find(p) != upset.end());
-
-      // recovery       Compute total objects excluding num_missing
-      //   - not in up  Compute misplaced objects excluding num_missing
-      // backfill       Compute total objects already backfilled
-      if (!is_backfill_targets(p)) {
-        unsigned osd_missing, osd_objects;
-        // primary handling
-        if (p == pg_whoami) {
-          osd_missing = pg_log.get_missing().num_missing();
-          info.stats.stats.sum.num_objects_missing_on_primary =
-              osd_missing;
-        } else {
-          assert(peer_missing.count(p));
-          osd_missing = peer_missing[p].num_missing();
-        }
-
-        osd_objects = MAX(0, num_objects - osd_missing);
-        object_copies += osd_objects;
-        // Count non-missing objects not in up as misplaced
-	if (!in_up) {
-	  misplaced += osd_objects;
-	  ++num_misplaced;
+      if (pool.info.is_replicated()) {
+	if (!acting_source_objects.empty()) {
+	  auto extra_copy = acting_source_objects.begin();
+	  extra_missing = std::get<0>(*extra_copy);
+          acting_source_objects.erase(extra_copy);
 	}
+      } else {	// Erasure coded
+	// Use corresponding shard
+	for (const auto& a : acting_source_objects) {
+	  if (std::get<1>(a).shard == std::get<1>(*m).shard) {
+	    extra_missing = std::get<0>(a);
+	    acting_source_objects.erase(a);
+	    break;
+	  }
+	}
+      }
+
+      if (extra_missing >= 0 && std::get<0>(*m) >= extra_missing) {
+	// We don't know which of the objects on the target
+	// are part of extra_missing so assume are all degraded.
+	misplaced += std::get<0>(*m) - extra_missing;
+	degraded += extra_missing;
       } else {
-        // If this peer has more objects then it should, ignore them
-        int64_t osd_backfilled = MIN(num_objects,
-				     peer_info[p].stats.stats.sum.num_objects);
-	backfill_target_objects.insert(make_pair(osd_backfilled, p));
-	backfilled += osd_backfilled;
+	// 1. extra_missing == -1, more targets than sources so degraded
+	// 2. extra_missing > std::get<0>(m), so that we know that some extra_missing
+	//    previously degraded are now present on the target.
+	degraded += std::get<0>(*m);
       }
     }
-
-    // Only include backfill targets below pool size into the object_copies
-    // count.  Use the most-full targets.
-    int num_backfill_shards_seen = 0;
-    for (auto i = backfill_target_objects.rbegin();
-	 i != backfill_target_objects.rend();
-	 ++i) {
-      if (actingset.size() + num_backfill_shards_seen < pool.info.size) {
-	object_copies += i->first;
-	++num_backfill_shards_seen;
-      } else {
-	break;
-      }
+    // If there are still acting that haven't been accounted for
+    // then they are misplaced
+    for (const auto& a : acting_source_objects) {
+      int64_t extra_misplaced = std::max((int64_t)0, num_objects - std::get<0>(a));
+      dout(20) << __func__ << " extra acting misplaced " << extra_misplaced << dendl;
+      misplaced += extra_misplaced;
     }
-
-    // Any objects that have been backfilled to up OSDs can deducted from misplaced
-    // adjusted by the assumption that backfill is happening approximately evenly
-    // across backfill nodes.  Use the most-full targets.
-    int64_t adjust_misplaced = 0;
-    for (auto i = backfill_target_objects.rbegin();
-	 i != backfill_target_objects.rend() && num_misplaced;
-	 ++i, --num_misplaced) {
-      adjust_misplaced += i->first;
-    }
-    misplaced = MAX(0, misplaced - adjust_misplaced);
-
-    // a degraded objects has fewer replicas or EC shards than the
-    // pool specifies.  num_object_copies will never be smaller than target * num_objects.
-    int64_t degraded = MAX(0, info.stats.stats.sum.num_object_copies - object_copies);
+    dout(20) << __func__ << " degraded " << degraded << dendl;
+    dout(20) << __func__ << " misplaced " << misplaced << dendl;
 
     info.stats.stats.sum.num_objects_degraded = degraded;
     info.stats.stats.sum.num_objects_unfound = get_num_unfound();
@@ -2804,7 +2846,7 @@ void PG::_update_blocked_by()
 {
   // set a max on the number of blocking peers we report. if we go
   // over, report a random subset.  keep the result sorted.
-  unsigned keep = MIN(blocked_by.size(), cct->_conf->osd_max_pg_blocked_by);
+  unsigned keep = std::min(blocked_by.size(), cct->_conf->osd_max_pg_blocked_by);
   unsigned skip = blocked_by.size() - keep;
   info.stats.blocked_by.clear();
   info.stats.blocked_by.resize(keep);
@@ -2856,6 +2898,11 @@ void PG::publish_stats_to_osd()
   }
 
   _update_calc_stats();
+  if (info.stats.stats.sum.num_objects_degraded) {
+    state_set(PG_STATE_DEGRADED);
+  } else {
+    state_clear(PG_STATE_DEGRADED);
+  }
   _update_blocked_by();
 
   pg_stat_t pre_publish = info.stats;
@@ -2998,7 +3045,7 @@ void PG::upgrade(ObjectStore *store)
   if (info_struct_v < latest_struct_v) {
     map<string,bufferlist> v;
     __u8 ver = latest_struct_v;
-    ::encode(ver, v[infover_key]);
+    encode(ver, v[infover_key]);
     t.omap_setkeys(coll, pgmeta_oid, v);
   }
 
@@ -3036,7 +3083,7 @@ int PG::_prepare_write_info(CephContext* cct,
 			    PerfCounters *logger)
 {
   if (dirty_epoch) {
-    ::encode(epoch, (*km)[epoch_key]);
+    encode(epoch, (*km)[epoch_key]);
   }
 
   if (logger)
@@ -3050,7 +3097,7 @@ int PG::_prepare_write_info(CephContext* cct,
     bool did = fast.try_apply_to(&last_written_info);
     assert(did);  // we verified last_update increased above
     if (info == last_written_info) {
-      ::encode(fast, (*km)[fastinfo_key]);
+      encode(fast, (*km)[fastinfo_key]);
       if (logger)
 	logger->inc(l_osd_pg_fastinfo);
       return 0;
@@ -3074,14 +3121,14 @@ int PG::_prepare_write_info(CephContext* cct,
   // info.  store purged_snaps separately.
   interval_set<snapid_t> purged_snaps;
   purged_snaps.swap(info.purged_snaps);
-  ::encode(info, (*km)[info_key]);
+  encode(info, (*km)[info_key]);
   purged_snaps.swap(info.purged_snaps);
 
   if (dirty_big_info) {
     // potentially big stuff
     bufferlist& bigbl = (*km)[biginfo_key];
-    ::encode(past_intervals, bigbl);
-    ::encode(info.purged_snaps, bigbl);
+    encode(past_intervals, bigbl);
+    encode(info.purged_snaps, bigbl);
     //dout(20) << "write_info bigbl " << bigbl.length() << dendl;
     if (logger)
       logger->inc(l_osd_pg_biginfo);
@@ -3105,8 +3152,8 @@ void PG::_init(ObjectStore::Transaction& t, spg_t pgid, const pg_pool_t *pool)
     bufferlist hint;
     uint32_t pg_num = pool->get_pg_num();
     uint64_t expected_num_objects_pg = pool->expected_num_objects / pg_num;
-    ::encode(pg_num, hint);
-    ::encode(expected_num_objects_pg, hint);
+    encode(pg_num, hint);
+    encode(expected_num_objects_pg, hint);
     uint32_t hint_type = ObjectStore::Transaction::COLL_HINT_EXPECTED_NUM_OBJECTS;
     t.collection_hint(coll, hint_type, hint);
   }
@@ -3115,7 +3162,7 @@ void PG::_init(ObjectStore::Transaction& t, spg_t pgid, const pg_pool_t *pool)
   t.touch(coll, pgmeta_oid);
   map<string,bufferlist> values;
   __u8 struct_v = latest_struct_v;
-  ::encode(struct_v, values[infover_key]);
+  encode(struct_v, values[infover_key]);
   t.omap_setkeys(coll, pgmeta_oid, values);
 }
 
@@ -3186,12 +3233,12 @@ int PG::peek_map_epoch(ObjectStore *store,
     // sanity check version
     bufferlist::iterator bp = values[infover_key].begin();
     __u8 struct_v = 0;
-    ::decode(struct_v, bp);
+    decode(struct_v, bp);
     assert(struct_v >= 8);
 
     // get epoch
     bp = values[epoch_key].begin();
-    ::decode(cur_epoch, bp);
+    decode(cur_epoch, bp);
   } else {
     // probably bug 10617; see OSD::load_pgs()
     return -1;
@@ -3398,20 +3445,20 @@ int PG::read_info(
 	 values.size() == 4);
 
   bufferlist::iterator p = values[infover_key].begin();
-  ::decode(struct_v, p);
+  decode(struct_v, p);
   assert(struct_v >= 10);
 
   p = values[info_key].begin();
-  ::decode(info, p);
+  decode(info, p);
 
   p = values[biginfo_key].begin();
-  ::decode(past_intervals, p);
-  ::decode(info.purged_snaps, p);
+  decode(past_intervals, p);
+  decode(info.purged_snaps, p);
 
   p = values[fastinfo_key].begin();
   if (!p.end()) {
     pg_fast_info_t fast;
-    ::decode(fast, p);
+    decode(fast, p);
     fast.try_apply_to(&info);
   }
   return 0;
@@ -3524,7 +3571,7 @@ void PG::update_snap_map(
 	bufferlist snapbl = i->snaps;
 	bufferlist::iterator p = snapbl.begin();
 	try {
-	  ::decode(snaps, p);
+	  decode(snaps, p);
 	} catch (...) {
 	  snaps.clear();
 	}
@@ -4072,7 +4119,7 @@ void PG::_scan_snaps(ScrubMap &smap)
       bl.push_back(o.attrs[SS_ATTR]);
       auto p = bl.begin();
       try {
-	::decode(snapset, p);
+	decode(snapset, p);
       } catch(...) {
 	continue;
       }
@@ -4169,7 +4216,7 @@ void PG::_repair_oinfo_oid(ScrubMap &smap)
       // Fix object info
       oi.soid = hoid;
       bl.clear();
-      ::encode(oi, bl, get_osdmap()->get_features(CEPH_ENTITY_TYPE_OSD, nullptr));
+      encode(oi, bl, get_osdmap()->get_features(CEPH_ENTITY_TYPE_OSD, nullptr));
 
       bufferptr bp(bl.c_str(), bl.length());
       o.attrs[OI_ATTR] = bp;
@@ -4255,7 +4302,7 @@ void PG::repair_object(
   object_info_t oi;
   try {
     bufferlist::iterator bliter = bv.begin();
-    ::decode(oi, bliter);
+    decode(oi, bliter);
   } catch (...) {
     dout(0) << __func__ << ": Need version of replica, bad object_info_t: " << soid << dendl;
     assert(0);
@@ -4336,7 +4383,7 @@ void PG::replica_scrub(
     spg_t(info.pgid.pgid, get_primary().shard),
     msg->map_epoch,
     pg_whoami);
-  ::encode(map, reply->get_data());
+  encode(map, reply->get_data());
   osd->send_message_osd_cluster(reply, msg->get_connection());
 }
 
@@ -4571,7 +4618,7 @@ void PG::chunky_scrub(ThreadPool::TPHandle &handle)
 	   * left end of the range if we are a tier because they may legitimately
 	   * not exist (see _scrub).
 	   */
-	  int min = MAX(3, cct->_conf->osd_scrub_chunk_min);
+	  int min = std::max<int64_t>(3, cct->_conf->osd_scrub_chunk_min);
           hobject_t start = scrubber.start;
 	  hobject_t candidate_end;
 	  vector<hobject_t> objects;
@@ -4579,7 +4626,7 @@ void PG::chunky_scrub(ThreadPool::TPHandle &handle)
 	  ret = get_pgbackend()->objects_list_partial(
 	    start,
 	    min,
-	    MAX(min, cct->_conf->osd_scrub_chunk_max),
+	    std::max<int64_t>(min, cct->_conf->osd_scrub_chunk_max),
 	    &objects,
 	    &candidate_end);
 	  assert(ret >= 0);
@@ -5079,22 +5126,23 @@ void PG::share_pg_info()
        i != actingbackfill.end();
        ++i) {
     if (*i == pg_whoami) continue;
-    pg_shard_t peer = *i;
-    if (peer_info.count(peer)) {
-      peer_info[peer].last_epoch_started = info.last_epoch_started;
-      peer_info[peer].last_interval_started = info.last_interval_started;
-      peer_info[peer].history.merge(info.history);
+    auto pg_shard = *i;
+    auto peer = peer_info.find(pg_shard);
+    if (peer != peer_info.end()) {
+      peer->second.last_epoch_started = info.last_epoch_started;
+      peer->second.last_interval_started = info.last_interval_started;
+      peer->second.history.merge(info.history);
     }
     MOSDPGInfo *m = new MOSDPGInfo(get_osdmap()->get_epoch());
     m->pg_list.push_back(
       make_pair(
 	pg_notify_t(
-	  peer.shard, pg_whoami.shard,
+	  pg_shard.shard, pg_whoami.shard,
 	  get_osdmap()->get_epoch(),
 	  get_osdmap()->get_epoch(),
 	  info),
 	past_intervals));
-    osd->send_message_osd_cluster(peer.osd, m, get_osdmap()->get_epoch());
+    osd->send_message_osd_cluster(pg_shard.osd, m, get_osdmap()->get_epoch());
   }
 }
 
@@ -5248,7 +5296,9 @@ void PG::check_full_transition(OSDMapRef lastmap, OSDMapRef osdmap)
     changed = true;
   }
   const pg_pool_t *pi = osdmap->get_pg_pool(info.pgid.pool());
-  assert(pi);
+  if (!pi) {
+    return; // pool deleted
+  }
   if (pi->has_flag(pg_pool_t::FLAG_FULL)) {
     const pg_pool_t *opi = lastmap->get_pg_pool(info.pgid.pool());
     if (!opi || !opi->has_flag(pg_pool_t::FLAG_FULL)) {
@@ -5318,7 +5368,7 @@ struct FlushState {
   ~FlushState() {
     pg->lock();
     if (!pg->pg_has_reset_since(epoch))
-      pg->queue_flushed(epoch);
+      pg->on_flushed();
     pg->unlock();
   }
 };
@@ -5450,7 +5500,8 @@ void PG::start_peering_interval(
       dirty_info = true;
       dirty_big_info = true;
       info.history.same_interval_since = osdmap->get_epoch();
-      if (info.pgid.pgid.is_split(lastmap->get_pg_num(info.pgid.pgid.pool()),
+      if (osdmap->have_pg_pool(info.pgid.pgid.pool()) &&
+	  info.pgid.pgid.is_split(lastmap->get_pg_num(info.pgid.pgid.pool()),
 				  osdmap->get_pg_num(info.pgid.pgid.pool()),
 				  nullptr)) {
 	info.history.last_epoch_split = osdmap->get_epoch();
@@ -5598,6 +5649,9 @@ ostream& operator<<(ostream& out, const PG& pg)
   out << " r=" << pg.get_role();
   out << " lpr=" << pg.get_last_peering_reset();
 
+  if (pg.deleting)
+    out << " DELETING";
+
   if (!pg.past_intervals.empty()) {
     out << " pi=[" << pg.past_intervals.get_bounds()
 	<< ")/" << pg.past_intervals.size();
@@ -5734,14 +5788,15 @@ bool PG::can_discard_replica_op(OpRequestRef& op)
   // connection to it when handling the new osdmap marking it down, and also
   // resets the messenger sesssion when the replica reconnects. to avoid the
   // out-of-order replies, the messages from that replica should be discarded.
-  if (osd->get_osdmap()->is_down(from))
+  OSDMapRef next_map = osd->get_next_osdmap();
+  if (next_map->is_down(from))
     return true;
   /* Mostly, this overlaps with the old_peering_msg
    * condition.  An important exception is pushes
    * sent by replicas not in the acting set, since
    * if such a replica goes down it does not cause
    * a new interval. */
-  if (get_osdmap()->get_down_at(from) >= m->map_epoch)
+  if (next_map->get_down_at(from) >= m->map_epoch)
     return true;
 
   // same pg?
@@ -5843,8 +5898,9 @@ void PG::take_waiters()
   for (auto i = peering_waiters.rbegin();
        i != peering_waiters.rend();
        ++i) {
-    osd->osd->enqueue_peering_evt_front(this, *i);
+    osd->osd->enqueue_peering_evt_front(info.pgid, *i);
   }
+  peering_waiters.clear();
 }
 
 void PG::do_peering_event(PGPeeringEventRef evt, RecoveryCtx *rctx)
@@ -5865,7 +5921,7 @@ void PG::queue_peering_event(PGPeeringEventRef evt)
 {
   if (old_peering_evt(evt))
     return;
-  osd->osd->enqueue_peering_evt(this, evt);
+  osd->osd->enqueue_peering_evt(info.pgid, evt);
 }
 
 void PG::queue_null(epoch_t msg_epoch,
@@ -5875,14 +5931,6 @@ void PG::queue_null(epoch_t msg_epoch,
   queue_peering_event(
     PGPeeringEventRef(std::make_shared<PGPeeringEvent>(msg_epoch, query_epoch,
 					 NullEvt())));
-}
-
-void PG::queue_flushed(epoch_t e)
-{
-  dout(10) << "flushed" << dendl;
-  queue_peering_event(
-    PGPeeringEventRef(std::make_shared<PGPeeringEvent>(e, e,
-					 FlushedEvt())));
 }
 
 void PG::queue_query(epoch_t msg_epoch,
@@ -6031,6 +6079,103 @@ void PG::update_store_on_load()
   }
 }
 
+struct C_DeleteMore : public Context {
+  PGRef pg;
+  epoch_t epoch;
+  int count = 2;
+  C_DeleteMore(PG *p, epoch_t e) : pg(p), epoch(e) {}
+  void finish(int r) override {
+    ceph_abort();
+  }
+  void complete(int r) override {
+    assert(r == 0);
+    // complete will be called exactly count times; only the last time will actualy
+    // complete.
+    if (--count) {
+      return;
+    }
+    pg->lock();
+    if (!pg->pg_has_reset_since(epoch)) {
+      pg->osd->queue_for_pg_delete(pg->get_pgid(), epoch);
+    }
+    pg->unlock();
+    delete this;
+  }
+};
+
+void PG::_delete_some()
+{
+  dout(10) << __func__ << dendl;
+
+  // we do not need to flush here because (1) we only start deleting after
+  // the initial metadata changes are applied and committed, and (2) we do not
+  // process the next chunk until we have applied and committed our work.
+
+  vector<ghobject_t> olist;
+  ObjectStore::Transaction t;
+  int max = std::min(osd->store->get_ideal_list_max(),
+		     (int)cct->_conf->osd_target_transaction_size);
+  ghobject_t next;
+  osd->store->collection_list(
+    coll,
+    next,
+    ghobject_t::get_max(),
+    max,
+    &olist,
+    &next);
+  dout(20) << __func__ << " " << olist << dendl;
+
+  OSDriver::OSTransaction _t(osdriver.get_transaction(&t));
+  int64_t num = 0;
+  for (auto& oid : olist) {
+    if (oid.is_pgmeta()) {
+      continue;
+    }
+    int r = snap_mapper.remove_oid(oid.hobj, &_t);
+    if (r != 0 && r != -ENOENT) {
+      ceph_abort();
+    }
+    t.remove(coll, oid);
+    ++num;
+  }
+  epoch_t e = get_osdmap()->get_epoch();
+  if (num) {
+    dout(20) << __func__ << " deleting " << num << " objects" << dendl;
+    Context *fin = new C_DeleteMore(this, e);
+    osd->store->queue_transaction(
+      osr.get(),
+      std::move(t),
+      fin,
+      fin);
+  } else {
+    dout(20) << __func__ << " finished" << dendl;
+    if (cct->_conf->osd_inject_failure_on_pg_removal) {
+      _exit(1);
+    }
+
+    ObjectStore::Transaction t;
+    PGLog::clear_info_log(info.pgid, &t);
+    t.remove_collection(coll);
+    PGRef pgref(this);
+    int r = osd->store->queue_transaction(
+      osd->meta_osr.get(), std::move(t),
+      // keep pg ref around until txn completes to avoid any issues
+      // with Sequencer lifecycle (seen w/ filestore).
+      new ContainerContext<PGRef>(pgref),
+      new ContainerContext<PGRef>(pgref));
+    assert(r == 0);
+
+    osd->finish_pg_delete(this);
+    deleted = true;
+
+    // cancel reserver here, since the PG is about to get deleted and the
+    // exit() methods don't run when that happens.
+    osd->local_reserver.cancel_reservation(info.pgid);
+  }
+}
+
+
+
 /*------------ Recovery State Machine----------------*/
 #undef dout_prefix
 #define dout_prefix (*_dout << context< RecoveryMachine >().pg->gen_prefix() \
@@ -6124,16 +6269,6 @@ PG::RecoveryState::Started::react(const IntervalFlush&)
   return discard_event();
 }
 
-
-boost::statechart::result
-PG::RecoveryState::Started::react(const FlushedEvt&)
-{
-  PG *pg = context< RecoveryMachine >().pg;
-  pg->on_flushed();
-  return discard_event();
-}
-
-
 boost::statechart::result PG::RecoveryState::Started::react(const AdvMap& advmap)
 {
   PG *pg = context< RecoveryMachine >().pg;
@@ -6182,14 +6317,6 @@ PG::RecoveryState::Reset::Reset(my_context ctx)
 
   pg->flushes_in_progress = 0;
   pg->set_last_peering_reset();
-}
-
-boost::statechart::result
-PG::RecoveryState::Reset::react(const FlushedEvt&)
-{
-  PG *pg = context< RecoveryMachine >().pg;
-  pg->on_flushed();
-  return discard_event();
 }
 
 boost::statechart::result
@@ -7084,6 +7211,7 @@ PG::RecoveryState::Recovering::Recovering(my_context ctx)
   pg->state_clear(PG_STATE_RECOVERY_WAIT);
   pg->state_clear(PG_STATE_RECOVERY_TOOFULL);
   pg->state_set(PG_STATE_RECOVERING);
+  assert(!pg->state_test(PG_STATE_ACTIVATING));
   pg->publish_stats_to_osd();
   pg->queue_recovery();
 }
@@ -7130,6 +7258,8 @@ PG::RecoveryState::Recovering::react(const RequestBackfill &evt)
   pg->state_clear(PG_STATE_FORCED_RECOVERY);
   release_reservations();
   pg->osd->local_reserver.cancel_reservation(pg->info.pgid);
+  // XXX: Is this needed?
+  pg->publish_stats_to_osd();
   return transit<WaitLocalBackfillReserved>();
 }
 
@@ -7182,7 +7312,6 @@ PG::RecoveryState::Recovered::Recovered(my_context ctx)
   assert(!pg->actingbackfill.empty());
   if (pg->get_osdmap()->get_pg_size(pg->info.pgid.pgid) <=
       pg->actingbackfill.size()) {
-    pg->state_clear(PG_STATE_DEGRADED);
     pg->state_clear(PG_STATE_FORCED_BACKFILL | PG_STATE_FORCED_RECOVERY);
     pg->publish_stats_to_osd();
   }
@@ -7315,6 +7444,7 @@ boost::statechart::result PG::RecoveryState::Active::react(const AdvMap& advmap)
     return forward_event();
   }
   ldout(pg->cct, 10) << "Active advmap" << dendl;
+  bool need_publish = false;
 
   if (advmap.osdmap->require_osd_release >= CEPH_RELEASE_MIMIC) {
     const auto& new_removed_snaps = advmap.osdmap->get_new_removed_snaps();
@@ -7393,7 +7523,7 @@ boost::statechart::result PG::RecoveryState::Active::react(const AdvMap& advmap)
       // share updated purged_snaps to mgr/mon so that we (a) stop reporting
       // purged snaps and (b) perhaps share more snaps that we have purged
       // but didn't fit in pg_stat_t.
-      pg->publish_stats_to_osd();
+      need_publish = true;
       pg->share_pg_info();
     }
   } else if (!pg->pool.newly_removed_snaps.empty()) {
@@ -7411,23 +7541,17 @@ boost::statechart::result PG::RecoveryState::Active::react(const AdvMap& advmap)
     }
   }
 
-  bool need_publish = false;
   /* Check for changes in pool size (if the acting set changed as a result,
    * this does not matter) */
   if (advmap.lastmap->get_pg_size(pg->info.pgid.pgid) !=
       pg->get_osdmap()->get_pg_size(pg->info.pgid.pgid)) {
     if (pg->get_osdmap()->get_pg_size(pg->info.pgid.pgid) <= pg->actingset.size()) {
       pg->state_clear(PG_STATE_UNDERSIZED);
-      if (pg->needs_recovery()) {
-	pg->state_set(PG_STATE_DEGRADED);
-      } else {
-	pg->state_clear(PG_STATE_DEGRADED);
-      }
     } else {
       pg->state_set(PG_STATE_UNDERSIZED);
-      pg->state_set(PG_STATE_DEGRADED);
     }
-    need_publish = true; // degraded may have changed
+    // degraded changes will be detected by call from publish_stats_to_osd()
+    need_publish = true;
   }
 
   // if we haven't reported our PG stats in a long time, do so now.
@@ -7544,7 +7668,8 @@ boost::statechart::result PG::RecoveryState::Active::react(const MLogRec& logevt
     pg->peer_missing[logevt.from],
     logevt.from,
     context< RecoveryMachine >().get_recovery_ctx());
-  if (got_missing) {
+  // If there are missing AND we are "fully" active then start recovery now
+  if (got_missing && pg->state_test(PG_STATE_ACTIVE)) {
     post_event(DoRecovery());
   }
   return discard_event();
@@ -7775,10 +7900,16 @@ PG::RecoveryState::Stray::Stray(my_context ctx)
   assert(!pg->is_peered());
   assert(!pg->is_peering());
   assert(!pg->is_primary());
-  pg->start_flush(
-    context< RecoveryMachine >().get_cur_transaction(),
-    context< RecoveryMachine >().get_on_applied_context_list(),
-    context< RecoveryMachine >().get_on_safe_context_list());
+
+  if (!pg->get_osdmap()->have_pg_pool(pg->get_pgid().pool())) {
+    ldout(pg->cct,10) << __func__ << " pool is deleted" << dendl;
+    post_event(DeleteStart());
+  } else {
+    pg->start_flush(
+      context< RecoveryMachine >().get_cur_transaction(),
+      context< RecoveryMachine >().get_on_applied_context_list(),
+      context< RecoveryMachine >().get_on_safe_context_list());
+  }
 }
 
 boost::statechart::result PG::RecoveryState::Stray::react(const MLogRec& logevt)
@@ -7874,6 +8005,95 @@ void PG::RecoveryState::Stray::exit()
   PG *pg = context< RecoveryMachine >().pg;
   utime_t dur = ceph_clock_now() - enter_time;
   pg->osd->recoverystate_perf->tinc(rs_stray_latency, dur);
+}
+
+
+/*--------ToDelete----------*/
+PG::RecoveryState::ToDelete::ToDelete(my_context ctx)
+  : my_base(ctx),
+    NamedState(context< RecoveryMachine >().pg, "Started/ToDelete")
+{
+  context< RecoveryMachine >().log_enter(state_name);
+  PG *pg = context< RecoveryMachine >().pg;
+  pg->osd->logger->inc(l_osd_pg_removing);
+}
+
+void PG::RecoveryState::ToDelete::exit()
+{
+  context< RecoveryMachine >().log_exit(state_name, enter_time);
+  PG *pg = context< RecoveryMachine >().pg;
+  pg->osd->logger->dec(l_osd_pg_removing);
+  pg->osd->local_reserver.cancel_reservation(pg->info.pgid);
+}
+
+/*----WaitDeleteReserved----*/
+PG::RecoveryState::WaitDeleteReserved::WaitDeleteReserved(my_context ctx)
+  : my_base(ctx),
+    NamedState(context< RecoveryMachine >().pg,
+	       "Started/ToDelete/WaitDeleteReseved")
+{
+  context< RecoveryMachine >().log_enter(state_name);
+  PG *pg = context< RecoveryMachine >().pg;
+  context<ToDelete>().priority = pg->get_delete_priority();
+  pg->osd->local_reserver.cancel_reservation(pg->info.pgid);
+  pg->osd->local_reserver.request_reservation(
+    pg->info.pgid,
+    new QueuePeeringEvt<DeleteReserved>(
+      pg, pg->get_osdmap()->get_epoch(),
+      DeleteReserved()),
+    context<ToDelete>().priority,
+    new QueuePeeringEvt<DeleteInterrupted>(
+      pg, pg->get_osdmap()->get_epoch(),
+      DeleteInterrupted()));
+}
+
+boost::statechart::result PG::RecoveryState::ToDelete::react(
+  const ActMap& evt)
+{
+  PG *pg = context< RecoveryMachine >().pg;
+  if (pg->get_delete_priority() != priority) {
+    ldout(pg->cct,10) << __func__ << " delete priority changed, resetting"
+		      << dendl;
+    return transit<ToDelete>();
+  }
+  return discard_event();
+}
+
+void PG::RecoveryState::WaitDeleteReserved::exit()
+{
+  context< RecoveryMachine >().log_exit(state_name, enter_time);
+}
+
+/*----Deleting-----*/
+PG::RecoveryState::Deleting::Deleting(my_context ctx)
+  : my_base(ctx),
+    NamedState(context< RecoveryMachine >().pg, "Started/ToDelete/Deleting")
+{
+  context< RecoveryMachine >().log_enter(state_name);
+  PG *pg = context< RecoveryMachine >().pg;
+  pg->deleting = true;
+  ObjectStore::Transaction* t = context<RecoveryMachine>().get_cur_transaction();
+  pg->on_removal(t);
+  RecoveryCtx *rctx = context<RecoveryMachine>().get_recovery_ctx();
+  Context *fin = new C_DeleteMore(pg, pg->get_osdmap()->get_epoch());
+  rctx->on_applied->contexts.push_back(fin);
+  rctx->on_safe->contexts.push_back(fin);
+}
+
+boost::statechart::result PG::RecoveryState::Deleting::react(
+  const DeleteSome& evt)
+{
+  PG *pg = context< RecoveryMachine >().pg;
+  pg->_delete_some();
+  return discard_event();
+}
+
+void PG::RecoveryState::Deleting::exit()
+{
+  context< RecoveryMachine >().log_exit(state_name, enter_time);
+  PG *pg = context< RecoveryMachine >().pg;
+  pg->deleting = false;
+  pg->osd->local_reserver.cancel_reservation(pg->info.pgid);
 }
 
 /*--------GetInfo---------*/
@@ -8018,7 +8238,6 @@ void PG::RecoveryState::GetInfo::exit()
   utime_t dur = ceph_clock_now() - enter_time;
   pg->osd->recoverystate_perf->tinc(rs_getinfo_latency, dur);
   pg->blocked_by.clear();
-  pg->publish_stats_to_osd();
 }
 
 /*------GetLog------------*/
@@ -8153,7 +8372,6 @@ void PG::RecoveryState::GetLog::exit()
   utime_t dur = ceph_clock_now() - enter_time;
   pg->osd->recoverystate_perf->tinc(rs_getlog_latency, dur);
   pg->blocked_by.clear();
-  pg->publish_stats_to_osd();
 }
 
 /*------WaitActingChange--------*/
@@ -8246,7 +8464,6 @@ void PG::RecoveryState::Down::exit()
   pg->osd->recoverystate_perf->tinc(rs_down_latency, dur);
 
   pg->blocked_by.clear();
-  pg->publish_stats_to_osd();
 }
 
 boost::statechart::result PG::RecoveryState::Down::react(const QueryState& q)
@@ -8324,7 +8541,6 @@ void PG::RecoveryState::Incomplete::exit()
   pg->osd->recoverystate_perf->tinc(rs_incomplete_latency, dur);
 
   pg->blocked_by.clear();
-  pg->publish_stats_to_osd();
 }
 
 /*------GetMissing--------*/
@@ -8469,7 +8685,6 @@ void PG::RecoveryState::GetMissing::exit()
   utime_t dur = ceph_clock_now() - enter_time;
   pg->osd->recoverystate_perf->tinc(rs_getmissing_latency, dur);
   pg->blocked_by.clear();
-  pg->publish_stats_to_osd();
 }
 
 /*------WaitUpThru--------*/
@@ -8646,14 +8861,4 @@ void PG::with_heartbeat_peers(std::function<void(int)> f)
     f(p);
   }
   heartbeat_peer_lock.Unlock();
-}
-
-void PG::pg_remove_object(const ghobject_t& oid, ObjectStore::Transaction *t)
-{
-  OSDriver::OSTransaction _t(osdriver.get_transaction(t));
-  int r = snap_mapper.remove_oid(oid.hobj, &_t);
-  if (r != 0 && r != -ENOENT) {
-    ceph_abort();
-  }
-  t->remove(coll, oid);
 }

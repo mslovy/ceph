@@ -1093,8 +1093,8 @@ class RGWDataSyncShardCR : public RGWCoroutine {
   uint32_t shard_id;
   rgw_data_sync_marker sync_marker;
 
-  map<string, bufferlist> entries;
-  map<string, bufferlist>::iterator iter;
+  std::set<std::string> entries;
+  std::set<std::string>::iterator iter;
 
   string oid;
 
@@ -1135,7 +1135,7 @@ class RGWDataSyncShardCR : public RGWCoroutine {
 
   string error_oid;
   RGWOmapAppend *error_repo;
-  map<string, bufferlist> error_entries;
+  std::set<std::string> error_entries;
   string error_marker;
   int max_error_entries;
 
@@ -1267,20 +1267,20 @@ public:
         tn->log(20, SSTR("retrieved " << entries.size() << " entries to sync"));
         iter = entries.begin();
         for (; iter != entries.end(); ++iter) {
-          tn->log(20, SSTR("full sync: " << iter->first));
+          tn->log(20, SSTR("full sync: " << *iter));
           total_entries++;
-          if (!marker_tracker->start(iter->first, total_entries, real_time())) {
-            tn->log(0, SSTR("ERROR: cannot start syncing " << iter->first << ". Duplicate entry?"));
+          if (!marker_tracker->start(*iter, total_entries, real_time())) {
+            tn->log(0, SSTR("ERROR: cannot start syncing " << *iter << ". Duplicate entry?"));
           } else {
             // fetch remote and write locally
-            yield spawn(new RGWDataSyncSingleEntryCR(sync_env, iter->first, iter->first, marker_tracker, error_repo, false, tn), false);
+            yield spawn(new RGWDataSyncSingleEntryCR(sync_env, *iter, *iter, marker_tracker, error_repo, false, tn), false);
             if (retcode < 0) {
               lease_cr->go_down();
               drain_all();
               return set_cr_error(retcode);
             }
           }
-          sync_marker.marker = iter->first;
+          sync_marker.marker = *iter;
         }
       } while ((int)entries.size() == max_entries);
 
@@ -1301,7 +1301,6 @@ public:
       }
       if (retcode < 0) {
         tn->log(0, SSTR("ERROR: failed to set sync marker: retcode=" << retcode));
-        lease_cr->go_down();
         return set_cr_error(retcode);
       }
     }
@@ -1354,9 +1353,9 @@ public:
         tn->log(20, SSTR("read error repo, got " << error_entries.size() << " entries"));
         iter = error_entries.begin();
         for (; iter != error_entries.end(); ++iter) {
-          tn->log(20, SSTR("handle error entry: " << iter->first));
-          spawn(new RGWDataSyncSingleEntryCR(sync_env, iter->first, iter->first, nullptr /* no marker tracker */, error_repo, true, tn), false);
-          error_marker = iter->first;
+          error_marker = *iter;
+          tn->log(20, SSTR("handle error entry: " << error_marker));
+          spawn(new RGWDataSyncSingleEntryCR(sync_env, error_marker, error_marker, nullptr /* no marker tracker */, error_repo, true, tn), false);
         }
         if ((int)error_entries.size() != max_error_entries) {
           if (error_marker.empty() && error_entries.empty()) {
@@ -1963,7 +1962,7 @@ static void decode_attr(CephContext *cct, map<string, bufferlist>& attrs, const 
 
   bufferlist::iterator biter = iter->second.begin();
   try {
-    ::decode(*val, biter);
+    decode(*val, biter);
   } catch (buffer::error& err) {
     ldout(cct, 0) << "ERROR: failed to decode attribute: " << attr_name << dendl;
   }
@@ -1985,17 +1984,20 @@ void rgw_bucket_shard_sync_info::encode_all_attrs(map<string, bufferlist>& attrs
 
 void rgw_bucket_shard_sync_info::encode_state_attr(map<string, bufferlist>& attrs)
 {
-  ::encode(state, attrs["state"]);
+  using ceph::encode;
+  encode(state, attrs["state"]);
 }
 
 void rgw_bucket_shard_full_sync_marker::encode_attr(map<string, bufferlist>& attrs)
 {
-  ::encode(*this, attrs["full_marker"]);
+  using ceph::encode;
+  encode(*this, attrs["full_marker"]);
 }
 
 void rgw_bucket_shard_inc_sync_marker::encode_attr(map<string, bufferlist>& attrs)
 {
-  ::encode(*this, attrs["inc_marker"]);
+  using ceph::encode;
+  encode(*this, attrs["inc_marker"]);
 }
 
 class RGWReadBucketSyncStatusCoroutine : public RGWCoroutine {

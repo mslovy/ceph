@@ -12,9 +12,9 @@
  * 
  */
 
+#include <regex>
 #include <sstream>
 #include <boost/utility.hpp>
-#include <boost/regex.hpp>
 
 #include "MDSMonitor.h"
 #include "FSCommands.h"
@@ -232,21 +232,21 @@ void MDSMonitor::encode_pending(MonitorDBStore::TransactionRef t)
   }
   pending_fsmap.get_health_checks(&new_checks);
   for (auto& p : new_checks.checks) {
-    p.second.summary = boost::regex_replace(
+    p.second.summary = std::regex_replace(
       p.second.summary,
-      boost::regex("%num%"),
+      std::regex("%num%"),
       stringify(p.second.detail.size()));
-    p.second.summary = boost::regex_replace(
+    p.second.summary = std::regex_replace(
       p.second.summary,
-      boost::regex("%plurals%"),
+      std::regex("%plurals%"),
       p.second.detail.size() > 1 ? "s" : "");
-    p.second.summary = boost::regex_replace(
+    p.second.summary = std::regex_replace(
       p.second.summary,
-      boost::regex("%isorare%"),
+      std::regex("%isorare%"),
       p.second.detail.size() > 1 ? "are" : "is");
-    p.second.summary = boost::regex_replace(
+    p.second.summary = std::regex_replace(
       p.second.summary,
-      boost::regex("%hasorhave%"),
+      std::regex("%hasorhave%"),
       p.second.detail.size() > 1 ? "have" : "has");
   }
   encode_health(new_checks, t);
@@ -912,7 +912,7 @@ bool MDSMonitor::preprocess_command(MonOpRequestRef op)
       f.reset(Formatter::create("json-pretty"));
 
     string who;
-    bool all = !cmd_getval(g_ceph_context, cmdmap, "role", who);
+    bool all = !cmd_getval(g_ceph_context, cmdmap, "who", who);
     dout(1) << "all = " << all << dendl;
     if (all) {
       r = 0;
@@ -1637,7 +1637,7 @@ void MDSMonitor::update_metadata(mds_gid_t gid,
 
   MonitorDBStore::TransactionRef t = paxos->get_pending_transaction();
   bufferlist bl;
-  ::encode(pending_metadata, bl);
+  encode(pending_metadata, bl);
   t->put(MDS_METADATA_PREFIX, "last_metadata", bl);
   paxos->trigger_propose();
 }
@@ -1657,7 +1657,7 @@ void MDSMonitor::remove_from_metadata(MonitorDBStore::TransactionRef t)
   if (!update)
     return;
   bufferlist bl;
-  ::encode(pending_metadata, bl);
+  encode(pending_metadata, bl);
   t->put(MDS_METADATA_PREFIX, "last_metadata", bl);
 }
 
@@ -1671,7 +1671,7 @@ int MDSMonitor::load_metadata(map<mds_gid_t, Metadata>& m)
   }
 
   bufferlist::iterator it = bl.begin();
-  ::decode(m, it);
+  decode(m, it);
   return 0;
 }
 

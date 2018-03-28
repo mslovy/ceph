@@ -84,7 +84,11 @@ void Journaler::_set_layout(file_layout_t const *l)
 {
   layout = *l;
 
-  assert(layout.pool_id == pg_pool);
+  if (layout.pool_id != pg_pool) {
+    // user can reset pool id through cephfs-journal-tool
+    lderr(cct) << "may got older pool id from header layout" << dendl;
+    ceph_abort();
+  }
   last_written.layout = layout;
   last_committed.layout = layout;
 
@@ -226,7 +230,7 @@ void Journaler::_finish_reread_head(int r, bufferlist& bl, Context *finish)
     Header h;
     bufferlist::iterator p = bl.begin();
     try {
-      ::decode(h, p);
+      decode(h, p);
     } catch (const buffer::error &e) {
       finish->complete(-EINVAL);
       return;
@@ -273,7 +277,7 @@ void Journaler::_finish_read_head(int r, bufferlist& bl)
   Header h;
   bufferlist::iterator p = bl.begin();
   try {
-    ::decode(h, p);
+    decode(h, p);
 
     if (h.magic != magic) {
       ldout(cct, 0) << "on disk magic '" << h.magic << "' != my magic '"
@@ -457,7 +461,7 @@ void Journaler::_write_head(Context *oncommit)
   last_wrote_head = ceph::real_clock::now();
 
   bufferlist bl;
-  ::encode(last_written, bl);
+  encode(last_written, bl);
   SnapContext snapc;
 
   object_t oid = file_object_t(ino, 0);
@@ -1402,13 +1406,13 @@ bool JournalStream::readable(bufferlist &read_buf, uint64_t *need) const
   }
   if (read_buf.length() >= *need) {
     if (format >= JOURNAL_FORMAT_RESILIENT) {
-      ::decode(entry_sentinel, p);
+      decode(entry_sentinel, p);
       if (entry_sentinel != sentinel) {
 	throw buffer::malformed_input("Invalid sentinel");
       }
     }
 
-    ::decode(entry_size, p);
+    decode(entry_size, p);
   } else {
     return false;
   }
@@ -1455,19 +1459,19 @@ size_t JournalStream::read(bufferlist &from, bufferlist *entry,
   bufferlist::iterator from_ptr = from.begin();
   if (format >= JOURNAL_FORMAT_RESILIENT) {
     uint64_t entry_sentinel = 0;
-    ::decode(entry_sentinel, from_ptr);
+    decode(entry_sentinel, from_ptr);
     // Assertion instead of clean check because of precondition of this
     // fn is that readable() already passed
     assert(entry_sentinel == sentinel);
   }
-  ::decode(entry_size, from_ptr);
+  decode(entry_size, from_ptr);
 
   // Read out the payload
   from_ptr.copy(entry_size, *entry);
 
   // Consume the envelope suffix (start_ptr)
   if (format >= JOURNAL_FORMAT_RESILIENT) {
-    ::decode(*start_ptr, from_ptr);
+    decode(*start_ptr, from_ptr);
   } else {
     *start_ptr = 0;
   }
@@ -1489,12 +1493,12 @@ size_t JournalStream::write(bufferlist &entry, bufferlist *to,
 
   uint32_t const entry_size = entry.length();
   if (format >= JOURNAL_FORMAT_RESILIENT) {
-    ::encode(sentinel, *to);
+    encode(sentinel, *to);
   }
-  ::encode(entry_size, *to);
+  encode(entry_size, *to);
   to->claim_append(entry);
   if (format >= JOURNAL_FORMAT_RESILIENT) {
-    ::encode(start_ptr, *to);
+    encode(start_ptr, *to);
   }
 
   if (format >= JOURNAL_FORMAT_RESILIENT) {

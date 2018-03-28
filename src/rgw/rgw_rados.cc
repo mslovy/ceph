@@ -394,6 +394,13 @@ int RGWZoneGroup::add_zone(const RGWZoneParams& zone_params, bool *is_master, bo
   }
   if (ptier_type) {
     zone.tier_type = *ptier_type;
+    if (!store->get_sync_modules_manager()->get_module(*ptier_type, nullptr)) {
+      ldout(cct, 0) << "ERROR: could not found sync module: " << *ptier_type 
+                    << ",  valid sync modules: " 
+                    << store->get_sync_modules_manager()->get_registered_module_names()
+                    << dendl;
+      return -ENOENT;
+    }
   }
 
   if (psync_from_all) {
@@ -550,6 +557,7 @@ int RGWSystemMetaObj::init(CephContext *_cct, RGWRados *_store, bool setup_obj, 
 
 int RGWSystemMetaObj::read_default(RGWDefaultSystemMetaObjInfo& default_info, const string& oid)
 {
+  using ceph::decode;
   auto pool = get_pool(cct);
   bufferlist bl;
   RGWObjectCtx obj_ctx(store);
@@ -559,7 +567,7 @@ int RGWSystemMetaObj::read_default(RGWDefaultSystemMetaObjInfo& default_info, co
 
   try {
     bufferlist::iterator iter = bl.begin();
-    ::decode(default_info, iter);
+    decode(default_info, iter);
   } catch (buffer::error& err) {
     ldout(cct, 0) << "error decoding data from " << pool << ":" << oid << dendl;
     return -EIO;
@@ -589,6 +597,7 @@ int RGWSystemMetaObj::use_default(bool old_format)
 
 int RGWSystemMetaObj::set_as_default(bool exclusive)
 {
+  using ceph::encode;
   string oid  = get_default_oid();
 
   rgw_pool pool(get_pool(cct));
@@ -597,9 +606,9 @@ int RGWSystemMetaObj::set_as_default(bool exclusive)
   RGWDefaultSystemMetaObjInfo default_info;
   default_info.default_id = id;
 
-  ::encode(default_info, bl);
+  encode(default_info, bl);
 
-  int ret = rgw_put_system_obj(store, pool, oid, bl.c_str(), bl.length(),
+  int ret = rgw_put_system_obj(store, pool, oid, bl,
                                exclusive, NULL, real_time(), NULL);
   if (ret < 0)
     return ret;
@@ -609,6 +618,7 @@ int RGWSystemMetaObj::set_as_default(bool exclusive)
 
 int RGWSystemMetaObj::read_id(const string& obj_name, string& object_id)
 {
+  using ceph::decode;
   rgw_pool pool(get_pool(cct));
   bufferlist bl;
 
@@ -623,7 +633,7 @@ int RGWSystemMetaObj::read_id(const string& obj_name, string& object_id)
   RGWNameToId nameToId;
   try {
     bufferlist::iterator iter = bl.begin();
-    ::decode(nameToId, iter);
+    decode(nameToId, iter);
   } catch (buffer::error& err) {
     ldout(cct, 0) << "ERROR: failed to decode obj from " << pool << ":" << oid << dendl;
     return -EIO;
@@ -685,8 +695,9 @@ int RGWSystemMetaObj::store_name(bool exclusive)
   nameToId.obj_id = id;
 
   bufferlist bl;
-  ::encode(nameToId, bl);
-  return  rgw_put_system_obj(store, pool, oid, bl.c_str(), bl.length(), exclusive, NULL, real_time(), NULL);
+  using ceph::encode;
+  encode(nameToId, bl);
+  return rgw_put_system_obj(store, pool, oid, bl, exclusive, NULL, real_time(), NULL);
 }
 
 int RGWSystemMetaObj::rename(const string& new_name)
@@ -739,10 +750,11 @@ int RGWSystemMetaObj::read_info(const string& obj_id, bool old_format)
     ldout(cct, 0) << "failed reading obj info from " << pool << ":" << oid << ": " << cpp_strerror(-ret) << dendl;
     return ret;
   }
+  using ceph::decode;
 
   try {
     bufferlist::iterator iter = bl.begin();
-    ::decode(*this, iter);
+    decode(*this, iter);
   } catch (buffer::error& err) {
     ldout(cct, 0) << "ERROR: failed to decode obj from " << pool << ":" << oid << dendl;
     return -EIO;
@@ -800,8 +812,9 @@ int RGWSystemMetaObj::store_info(bool exclusive)
   string oid = get_info_oid_prefix() + id;
 
   bufferlist bl;
-  ::encode(*this, bl);
-  return  rgw_put_system_obj(store, pool, oid, bl.c_str(), bl.length(), exclusive, NULL, real_time(), NULL);
+  using ceph::encode;
+  encode(*this, bl);
+  return rgw_put_system_obj(store, pool, oid, bl, exclusive, NULL, real_time(), NULL);
 }
 
 int RGWSystemMetaObj::write(bool exclusive)
@@ -885,7 +898,8 @@ int RGWRealm::create_control(bool exclusive)
 {
   auto pool = rgw_pool{get_pool(cct)};
   auto oid = get_control_oid();
-  return rgw_put_system_obj(store, pool, oid, nullptr, 0, exclusive,
+  bufferlist bl;
+  return rgw_put_system_obj(store, pool, oid, bl, exclusive,
                             nullptr, real_time(), nullptr);
 }
 
@@ -982,11 +996,12 @@ int RGWRealm::notify_zone(bufferlist& bl)
 int RGWRealm::notify_new_period(const RGWPeriod& period)
 {
   bufferlist bl;
+  using ceph::encode;
   // push the period to dependent zonegroups/zones
-  ::encode(RGWRealmNotify::ZonesNeedPeriod, bl);
-  ::encode(period, bl);
+  encode(RGWRealmNotify::ZonesNeedPeriod, bl);
+  encode(period, bl);
   // reload the gateway with the new period
-  ::encode(RGWRealmNotify::Reload, bl);
+  encode(RGWRealmNotify::Reload, bl);
 
   return notify_zone(bl);
 }
@@ -1019,9 +1034,10 @@ int RGWPeriodConfig::read(RGWRados *store, const std::string& realm_id)
   if (ret < 0) {
     return ret;
   }
+  using ceph::decode;
   try {
     bufferlist::iterator iter = bl.begin();
-    ::decode(*this, iter);
+    decode(*this, iter);
   } catch (buffer::error& err) {
     return -EIO;
   }
@@ -1033,8 +1049,9 @@ int RGWPeriodConfig::write(RGWRados *store, const std::string& realm_id)
   const auto& pool = get_pool(store->ctx());
   const auto& oid = get_oid(realm_id);
   bufferlist bl;
-  ::encode(*this, bl);
-  return rgw_put_system_obj(store, pool, oid, bl.c_str(), bl.length(),
+  using ceph::encode;
+  encode(*this, bl);
+  return rgw_put_system_obj(store, pool, oid, bl,
                             false, nullptr, real_time(), nullptr);
 }
 
@@ -1167,7 +1184,8 @@ int RGWPeriod::read_latest_epoch(RGWPeriodLatestEpochInfo& info,
   }
   try {
     bufferlist::iterator iter = bl.begin();
-    ::decode(info, iter);
+    using ceph::decode;
+    decode(info, iter);
   } catch (buffer::error& err) {
     ldout(cct, 0) << "error decoding data from " << pool << ":" << oid << dendl;
     return -EIO;
@@ -1214,9 +1232,10 @@ int RGWPeriod::set_latest_epoch(epoch_t epoch, bool exclusive,
   RGWPeriodLatestEpochInfo info;
   info.epoch = epoch;
 
-  ::encode(info, bl);
+  using ceph::encode;
+  encode(info, bl);
 
-  return rgw_put_system_obj(store, pool, oid, bl.c_str(), bl.length(),
+  return rgw_put_system_obj(store, pool, oid, bl,
                             exclusive, objv, real_time(), nullptr);
 }
 
@@ -1304,8 +1323,9 @@ int RGWPeriod::read_info()
   }
 
   try {
+    using ceph::decode;
     bufferlist::iterator iter = bl.begin();
-    ::decode(*this, iter);
+    decode(*this, iter);
   } catch (buffer::error& err) {
     ldout(cct, 0) << "ERROR: failed to decode obj from " << pool << ":" << get_period_oid() << dendl;
     return -EIO;
@@ -1349,9 +1369,10 @@ int RGWPeriod::store_info(bool exclusive)
 
   string oid = get_period_oid();
   bufferlist bl;
-  ::encode(*this, bl);
+  using ceph::encode;
+  encode(*this, bl);
 
-  return rgw_put_system_obj(store, pool, oid, bl.c_str(), bl.length(),
+  return rgw_put_system_obj(store, pool, oid, bl,
                             exclusive, NULL, real_time(), NULL);
 }
 
@@ -1875,20 +1896,20 @@ const string& RGWZoneParams::get_compression_type(const string& placement_rule) 
 
 void RGWPeriodMap::encode(bufferlist& bl) const {
   ENCODE_START(2, 1, bl);
-  ::encode(id, bl);
-  ::encode(zonegroups, bl);
-  ::encode(master_zonegroup, bl);
-  ::encode(short_zone_ids, bl);
+  encode(id, bl);
+  encode(zonegroups, bl);
+  encode(master_zonegroup, bl);
+  encode(short_zone_ids, bl);
   ENCODE_FINISH(bl);
 }
 
 void RGWPeriodMap::decode(bufferlist::iterator& bl) {
   DECODE_START(2, bl);
-  ::decode(id, bl);
-  ::decode(zonegroups, bl);
-  ::decode(master_zonegroup, bl);
+  decode(id, bl);
+  decode(zonegroups, bl);
+  decode(master_zonegroup, bl);
   if (struct_v >= 2) {
-    ::decode(short_zone_ids, bl);
+    decode(short_zone_ids, bl);
   }
   DECODE_FINISH(bl);
 
@@ -1908,7 +1929,7 @@ static uint32_t gen_short_zone_id(const std::string zone_id)
 {
   unsigned char md5[CEPH_CRYPTO_MD5_DIGESTSIZE];
   MD5 hash;
-  hash.Update((const byte *)zone_id.c_str(), zone_id.size());
+  hash.Update((const ::byte *)zone_id.c_str(), zone_id.size());
   hash.Final(md5);
 
   uint32_t short_id;
@@ -1996,41 +2017,41 @@ int RGWZoneGroupMap::read(CephContext *cct, RGWRados *store)
 
 void RGWRegionMap::encode(bufferlist& bl) const {
   ENCODE_START( 3, 1, bl);
-  ::encode(regions, bl);
-  ::encode(master_region, bl);
-  ::encode(bucket_quota, bl);
-  ::encode(user_quota, bl);
+  encode(regions, bl);
+  encode(master_region, bl);
+  encode(bucket_quota, bl);
+  encode(user_quota, bl);
   ENCODE_FINISH(bl);
 }
 
 void RGWRegionMap::decode(bufferlist::iterator& bl) {
   DECODE_START(3, bl);
-  ::decode(regions, bl);
-  ::decode(master_region, bl);
+  decode(regions, bl);
+  decode(master_region, bl);
   if (struct_v >= 2)
-    ::decode(bucket_quota, bl);
+    decode(bucket_quota, bl);
   if (struct_v >= 3)
-    ::decode(user_quota, bl);
+    decode(user_quota, bl);
   DECODE_FINISH(bl);
 }
 
 void RGWZoneGroupMap::encode(bufferlist& bl) const {
   ENCODE_START( 3, 1, bl);
-  ::encode(zonegroups, bl);
-  ::encode(master_zonegroup, bl);
-  ::encode(bucket_quota, bl);
-  ::encode(user_quota, bl);
+  encode(zonegroups, bl);
+  encode(master_zonegroup, bl);
+  encode(bucket_quota, bl);
+  encode(user_quota, bl);
   ENCODE_FINISH(bl);
 }
 
 void RGWZoneGroupMap::decode(bufferlist::iterator& bl) {
   DECODE_START(3, bl);
-  ::decode(zonegroups, bl);
-  ::decode(master_zonegroup, bl);
+  decode(zonegroups, bl);
+  decode(master_zonegroup, bl);
   if (struct_v >= 2)
-    ::decode(bucket_quota, bl);
+    decode(bucket_quota, bl);
   if (struct_v >= 3)
-    ::decode(user_quota, bl);
+    decode(user_quota, bl);
   DECODE_FINISH(bl);
 
   zonegroups_by_api.clear();
@@ -3853,7 +3874,7 @@ int RGWRados::convert_regionmap()
 
   try {
     bufferlist::iterator iter = bl.begin();
-    ::decode(zonegroupmap, iter);
+    decode(zonegroupmap, iter);
   } catch (buffer::error& err) {
     ldout(cct, 0) << "error decoding regionmap from " << pool << ":" << oid << dendl;
     return -EIO;
@@ -3987,7 +4008,7 @@ int RGWRados::replace_region_with_zonegroup()
     unsigned char md5[CEPH_CRYPTO_MD5_DIGESTSIZE];
     char md5_str[CEPH_CRYPTO_MD5_DIGESTSIZE * 2 + 1];
     MD5 hash;
-    hash.Update((const byte *)new_realm_name.c_str(), new_realm_name.length());
+    hash.Update((const ::byte *)new_realm_name.c_str(), new_realm_name.length());
     hash.Final(md5);
     buf_to_hex(md5, CEPH_CRYPTO_MD5_DIGESTSIZE, md5_str);
     string new_realm_id(md5_str);
@@ -4135,7 +4156,7 @@ int RGWRados::replace_region_with_zonegroup()
   }
 
   /* mark as converted */
-  ret = rgw_put_system_obj(this, pool, oid, bl.c_str(), bl.length(),
+  ret = rgw_put_system_obj(this, pool, oid, bl,
 			   true, NULL, real_time(), NULL);
   if (ret < 0 ) {
     ldout(cct, 0) << __func__ << " failed to mark cluster as converted: ret "<< ret << " " << cpp_strerror(-ret)
@@ -4396,6 +4417,12 @@ int RGWRados::init_complete()
     ret = sync_modules_manager->create_instance(cct, zone_public_config.tier_type, zone_params.tier_config, &sync_module);
     if (ret < 0) {
       lderr(cct) << "ERROR: failed to init sync module instance, ret=" << ret << dendl;
+      if (ret == -ENOENT) {
+        lderr(cct) << "ERROR: " << zone_public_config.tier_type 
+                   << " sync module does not exist. valid sync modules: " 
+                   << sync_modules_manager->get_registered_module_names()
+                   << dendl;
+      }
       return ret;
     }
   }
@@ -5020,7 +5047,7 @@ int RGWRados::log_show_next(RGWAccessHandle handle, rgw_log_entry *entry)
   if (state->p.end())
     return 0;  // end of file
   try {
-    ::decode(*entry, state->p);
+    decode(*entry, state->p);
   }
   catch (const buffer::error &e) {
     return -EINVAL;
@@ -5375,7 +5402,7 @@ int RGWRados::objexp_hint_add(const ceph::real_time& delete_at,
       .obj_key = obj_key,
       .exp_time = delete_at };
   bufferlist hebl;
-  ::encode(he, hebl);
+  encode(he, hebl);
   ObjectWriteOperation op;
   cls_timeindex_add(op, utime_t(delete_at), keyext, hebl);
 
@@ -5421,7 +5448,7 @@ int RGWRados::objexp_hint_parse(cls_timeindex_entry &ti_entry,  /* in */
 {
   try {
     bufferlist::iterator iter = ti_entry.value.begin();
-    ::decode(hint_entry, iter);
+    decode(hint_entry, iter);
   } catch (buffer::error& err) {
     ldout(cct, 0) << "ERROR: couldn't decode avail_pools" << dendl;
   }
@@ -5697,10 +5724,6 @@ int RGWRados::Bucket::List::list_objects(int64_t max,
       result->emplace_back(std::move(entry));
       count++;
     }
-
-    // Either the back-end telling us truncated, or we don't consume all
-    // items returned per the amount caller request
-    truncated = (truncated || eiter != ent_map.end());
   }
 
 done:
@@ -5947,7 +5970,11 @@ int RGWRados::select_bucket_location_by_rule(const string& location_rule, RGWZon
     /* we can only reach here if we're trying to set a bucket location from a bucket
      * created on a different zone, using a legacy / default pool configuration
      */
-    return select_legacy_bucket_placement(rule_info);
+    if (rule_info) {
+      return select_legacy_bucket_placement(rule_info);
+    }
+
+    return 0;
   }
 
   /*
@@ -5989,7 +6016,11 @@ int RGWRados::select_bucket_placement(RGWUserInfo& user_info, const string& zone
     pselected_rule_name->clear();
   }
 
-  return select_legacy_bucket_placement(rule_info);
+  if (rule_info) {
+    return select_legacy_bucket_placement(rule_info);
+  }
+
+  return 0;
 }
 
 int RGWRados::select_legacy_bucket_placement(RGWZonePlacementInfo *rule_info)
@@ -6009,7 +6040,7 @@ int RGWRados::select_legacy_bucket_placement(RGWZonePlacementInfo *rule_info)
 
   try {
     bufferlist::iterator iter = map_bl.begin();
-    ::decode(m, iter);
+    decode(m, iter);
   } catch (buffer::error& err) {
     ldout(cct, 0) << "ERROR: couldn't decode avail_pools" << dendl;
   }
@@ -6039,7 +6070,7 @@ read_omap:
 
   if (write_map) {
     bufferlist new_bl;
-    ::encode(m, new_bl);
+    encode(m, new_bl);
     ret = put_system_obj_data(NULL, obj, new_bl, -1, false);
     if (ret < 0) {
       ldout(cct, 0) << "WARNING: could not save avail pools map info ret=" << ret << dendl;
@@ -6084,7 +6115,7 @@ int RGWRados::update_placement_map()
     return ret;
 
   bufferlist new_bl;
-  ::encode(m, new_bl);
+  encode(m, new_bl);
   ret = put_system_obj_data(NULL, obj, new_bl, -1, false);
   if (ret < 0) {
     ldout(cct, 0) << "WARNING: could not save avail pools map info ret=" << ret << dendl;
@@ -6419,6 +6450,9 @@ int RGWRados::move_rados_obj(librados::IoCtx& src_ioctx,
     }
     wop.write(ofs, data);
     ret = dst_ioctx.operate(dst_oid, &wop);
+    if (ret < 0) {
+      goto done_err;
+    }
     ofs += data.length();
     done = data.length() != chunk_size;
   } while (!done);
@@ -6435,6 +6469,7 @@ int RGWRados::move_rados_obj(librados::IoCtx& src_ioctx,
   return 0;
 
 done_err:
+  // TODO: clean up dst_oid if we created it
   lderr(cct) << "ERROR: failed to copy " << src_oid << " -> " << dst_oid << dendl;
   return ret;
 }
@@ -6893,7 +6928,7 @@ int RGWRados::Object::Write::_do_write_meta(uint64_t size, uint64_t accounted_si
       attrs.erase(iter);
 
     bufferlist bl;
-    ::encode(*meta.manifest, bl);
+    encode(*meta.manifest, bl);
     op.setxattr(RGW_ATTR_MANIFEST, bl);
   }
 
@@ -6920,7 +6955,7 @@ int RGWRados::Object::Write::_do_write_meta(uint64_t size, uint64_t accounted_si
 
   if (attrs.find(RGW_ATTR_SOURCE_ZONE) == attrs.end()) {
     bufferlist bl;
-    ::encode(store->get_zone_short_id(), bl);
+    encode(store->get_zone_short_id(), bl);
     op.setxattr(RGW_ATTR_SOURCE_ZONE, bl);
   }
 
@@ -7089,7 +7124,7 @@ int RGWRados::Object::Write::write_meta(uint64_t size, uint64_t accounted_size,
 /** Write/overwrite a system object. */
 int RGWRados::put_system_obj_impl(rgw_raw_obj& obj, uint64_t size, real_time *mtime,
               map<std::string, bufferlist>& attrs, int flags,
-              bufferlist& data,
+              const bufferlist& data,
               RGWObjVersionTracker *objv_tracker,
               real_time set_mtime /* 0 for don't set */)
 {
@@ -7150,7 +7185,7 @@ int RGWRados::put_system_obj_impl(rgw_raw_obj& obj, uint64_t size, real_time *mt
   return 0;
 }
 
-int RGWRados::put_system_obj_data(void *ctx, rgw_raw_obj& obj, bufferlist& bl,
+int RGWRados::put_system_obj_data(void *ctx, rgw_raw_obj& obj, const bufferlist& bl,
                                   off_t ofs, bool exclusive,
                                   RGWObjVersionTracker *objv_tracker)
 {
@@ -7789,7 +7824,7 @@ int RGWRados::fetch_remote_obj(RGWObjectCtx& obj_ctx,
     cs_info.compression_type = plugin->get_type_name();
     cs_info.orig_size = cb.get_data_len();
     cs_info.blocks = move(compressor->get_compression_blocks());
-    ::encode(cs_info, tmp);
+    encode(cs_info, tmp);
     cb.get_attrs()[RGW_ATTR_COMPRESSION] = tmp;
   }
 
@@ -7799,7 +7834,7 @@ int RGWRados::fetch_remote_obj(RGWObjectCtx& obj_ctx,
     map<string, bufferlist>::iterator iter = cb.get_attrs().find(RGW_ATTR_DELETE_AT);
     if (iter != cb.get_attrs().end()) {
       try {
-        ::decode(delete_at, iter->second);
+        decode(delete_at, iter->second);
       } catch (buffer::error& err) {
         ldout(cct, 0) << "ERROR: failed to decode delete_at field in intra zone copy" << dendl;
       }
@@ -7829,7 +7864,7 @@ int RGWRados::fetch_remote_obj(RGWObjectCtx& obj_ctx,
     if (i != attrs.end() && i->second.length() > 0) {
       bufferlist::iterator iter = i->second.begin();
       try {
-        ::decode(pg_ver, iter);
+        decode(pg_ver, iter);
       } catch (buffer::error& err) {
         ldout(ctx(), 0) << "ERROR: failed to decode pg ver attribute, ignoring" << dendl;
         /* non critical error */
@@ -8856,7 +8891,7 @@ int RGWRados::Object::Delete::delete_obj()
     /* only delete object if mtime is less than or equal to params.unmod_since */
     store->cls_obj_check_mtime(op, params.unmod_since, params.high_precision_time, CLS_RGW_CHECK_TIME_MTIME_LE);
   }
-  uint64_t obj_size = state->size;
+  uint64_t obj_accounted_size = state->accounted_size;
 
   if (!real_clock::is_zero(params.expiration_time)) {
     bufferlist bl;
@@ -8865,7 +8900,7 @@ int RGWRados::Object::Delete::delete_obj()
     if (state->get_attr(RGW_ATTR_DELETE_AT, bl)) {
       try {
         bufferlist::iterator iter = bl.begin();
-        ::decode(delete_at, iter);
+        decode(delete_at, iter);
       } catch (buffer::error& err) {
         ldout(store->ctx(), 0) << "ERROR: couldn't decode RGW_ATTR_DELETE_AT" << dendl;
 	return -EIO;
@@ -8938,7 +8973,7 @@ int RGWRados::Object::Delete::delete_obj()
     return r;
 
   /* update quota cache */
-  store->quota_handler->update_stats(params.bucket_owner, obj.bucket, -1, 0, obj_size);
+  store->quota_handler->update_stats(params.bucket_owner, obj.bucket, -1, 0, obj_accounted_size);
 
   return 0;
 }
@@ -9046,12 +9081,12 @@ static void generate_fake_tag(RGWRados *store, map<string, bufferlist>& attrset,
   unsigned char md5[CEPH_CRYPTO_MD5_DIGESTSIZE];
   char md5_str[CEPH_CRYPTO_MD5_DIGESTSIZE * 2 + 1];
   MD5 hash;
-  hash.Update((const byte *)manifest_bl.c_str(), manifest_bl.length());
+  hash.Update((const ::byte *)manifest_bl.c_str(), manifest_bl.length());
 
   map<string, bufferlist>::iterator iter = attrset.find(RGW_ATTR_ETAG);
   if (iter != attrset.end()) {
     bufferlist& bl = iter->second;
-    hash.Update((const byte *)bl.c_str(), bl.length());
+    hash.Update((const ::byte *)bl.c_str(), bl.length());
   }
 
   hash.Final(md5);
@@ -9201,7 +9236,7 @@ int RGWRados::get_obj_state_impl(RGWObjectCtx *rctx, const RGWBucketInfo& bucket
     try {
       RGWCompressionInfo info;
       auto p = iter->second.begin();
-      ::decode(info, p);
+      decode(info, p);
       s->accounted_size = info.orig_size; 
     } catch (buffer::error&) {
       dout(0) << "ERROR: could not decode compression info for object: " << obj << dendl;
@@ -9226,7 +9261,7 @@ int RGWRados::get_obj_state_impl(RGWObjectCtx *rctx, const RGWBucketInfo& bucket
   if (manifest_bl.length()) {
     bufferlist::iterator miter = manifest_bl.begin();
     try {
-      ::decode(s->manifest, miter);
+      decode(s->manifest, miter);
       s->has_manifest = true;
       s->manifest.set_head(bucket_info.placement_rule, obj, s->size); /* patch manifest to reflect the head we just read, some manifests might be
                                              broken due to old bugs */
@@ -9260,7 +9295,7 @@ int RGWRados::get_obj_state_impl(RGWObjectCtx *rctx, const RGWBucketInfo& bucket
     if (pg_ver_bl.length()) {
       bufferlist::iterator pgbl = pg_ver_bl.begin();
       try {
-        ::decode(s->pg_ver, pgbl);
+        decode(s->pg_ver, pgbl);
       } catch (buffer::error& err) {
         ldout(cct, 0) << "ERROR: couldn't decode pg ver attr for object " << s->obj << ", non-critical error, ignoring" << dendl;
       }
@@ -9272,7 +9307,7 @@ int RGWRados::get_obj_state_impl(RGWObjectCtx *rctx, const RGWBucketInfo& bucket
     if (zone_short_id_bl.length()) {
       bufferlist::iterator zbl = zone_short_id_bl.begin();
       try {
-        ::decode(s->zone_short_id, zbl);
+        decode(s->zone_short_id, zbl);
       } catch (buffer::error& err) {
         ldout(cct, 0) << "ERROR: couldn't decode zone short id attr for object " << s->obj << ", non-critical error, ignoring" << dendl;
       }
@@ -9412,7 +9447,7 @@ int RGWRados::Object::Stat::finish()
     bufferlist& bl = iter->second;
     bufferlist::iterator biter = bl.begin();
     try {
-      ::decode(result.manifest, biter);
+      decode(result.manifest, biter);
     } catch (buffer::error& err) {
       RGWRados *store = source->get_store();
       ldout(store->ctx(), 0) << "ERROR: " << __func__ << ": failed to decode manifest"  << dendl;
@@ -9694,7 +9729,7 @@ int RGWRados::set_attrs(void *ctx, const RGWBucketInfo& bucket_info, rgw_obj& ob
     if (name.compare(RGW_ATTR_DELETE_AT) == 0) {
       real_time ts;
       try {
-        ::decode(ts, bl);
+        decode(ts, bl);
 
         rgw_obj_index_key obj_key;
         obj.key.get_index_key(&obj_key);
@@ -10225,7 +10260,8 @@ int RGWRados::get_system_obj(RGWObjectCtx& obj_ctx, RGWRados::SystemObject::Read
                              RGWObjVersionTracker *objv_tracker, rgw_raw_obj& obj,
                              bufferlist& bl, off_t ofs, off_t end,
                              map<string, bufferlist> *attrs,
-                             rgw_cache_entry_info *cache_info)
+                             rgw_cache_entry_info *cache_info,
+			     boost::optional<obj_version>)
 {
   uint64_t len;
   ObjectReadOperation op;
@@ -10272,12 +10308,16 @@ int RGWRados::get_system_obj(RGWObjectCtx& obj_ctx, RGWRados::SystemObject::Read
   return bl.length();
 }
 
-int RGWRados::SystemObject::Read::read(int64_t ofs, int64_t end, bufferlist& bl, RGWObjVersionTracker *objv_tracker)
+int RGWRados::SystemObject::Read::read(int64_t ofs, int64_t end, bufferlist& bl,
+				       RGWObjVersionTracker *objv_tracker,
+				       boost::optional<obj_version> refresh_version)
 {
   RGWRados *store = source->get_store();
   rgw_raw_obj& obj = source->get_obj();
 
-  return store->get_system_obj(source->get_ctx(), state, objv_tracker, obj, bl, ofs, end, read_params.attrs, read_params.cache_info);
+  return store->get_system_obj(source->get_ctx(), state, objv_tracker, obj, bl,
+			       ofs, end, read_params.attrs,
+			       read_params.cache_info, refresh_version);
 }
 
 int RGWRados::SystemObject::Read::get_attr(const char *name, bufferlist& dest)
@@ -10843,7 +10883,7 @@ int RGWRados::olh_init_modification_impl(const RGWBucketInfo& bucket_info, RGWOb
   bufferlist bl;
   RGWOLHPendingInfo pending_info;
   pending_info.time = real_clock::now();
-  ::encode(pending_info, bl);
+  encode(pending_info, bl);
 
 #define OLH_PENDING_TAG_LEN 32
   /* tag will start with current time epoch, this so that entries are sorted by time */
@@ -11178,7 +11218,7 @@ int RGWRados::apply_olh_log(RGWObjectCtx& obj_ctx, RGWObjState& state, const RGW
     info.target = target;
     info.removed = delete_marker;
     bufferlist bl;
-    ::encode(info, bl);
+    encode(info, bl);
     op.setxattr(RGW_ATTR_OLH_INFO, bl);
   }
 
@@ -11428,7 +11468,7 @@ int RGWRados::get_olh(const RGWBucketInfo& bucket_info, const rgw_obj& obj, RGWO
 
   try {
     bufferlist::iterator biter = iter->second.begin();
-    ::decode(*olh, biter);
+    decode(*olh, biter);
   } catch (buffer::error& err) {
     ldout(cct, 0) << "ERROR: failed to decode olh info" << dendl;
     return -EIO;
@@ -11448,7 +11488,7 @@ void RGWRados::check_pending_olh_entries(map<string, bufferlist>& pending_entrie
     bufferlist::iterator biter = iter->second.begin();
     RGWOLHPendingInfo pending_info;
     try {
-      ::decode(pending_info, biter);
+      decode(pending_info, biter);
     } catch (buffer::error& err) {
       /* skipping bad entry, we could remove it but it might hide a bug */
       ldout(cct, 0) << "ERROR: failed to decode pending entry " << iter->first << dendl;
@@ -11527,7 +11567,7 @@ int RGWRados::follow_olh(const RGWBucketInfo& bucket_info, RGWObjectCtx& obj_ctx
   RGWOLHInfo olh;
   try {
     bufferlist::iterator biter = iter->second.begin();
-    ::decode(olh, biter);
+    decode(olh, biter);
   } catch (buffer::error& err) {
     ldout(cct, 0) << "ERROR: failed to decode olh info" << dendl;
     return -EIO;
@@ -11811,20 +11851,23 @@ int RGWRados::get_bucket_instance_info(RGWObjectCtx& obj_ctx, const rgw_bucket& 
 
 int RGWRados::get_bucket_instance_from_oid(RGWObjectCtx& obj_ctx, const string& oid, RGWBucketInfo& info,
                                            real_time *pmtime, map<string, bufferlist> *pattrs,
-                                           rgw_cache_entry_info *cache_info)
+                                           rgw_cache_entry_info *cache_info,
+					   boost::optional<obj_version> refresh_version)
 {
   ldout(cct, 20) << "reading from " << get_zone_params().domain_root << ":" << oid << dendl;
 
   bufferlist epbl;
 
-  int ret = rgw_get_system_obj(this, obj_ctx, get_zone_params().domain_root, oid, epbl, &info.objv_tracker, pmtime, pattrs, cache_info);
+  int ret = rgw_get_system_obj(this, obj_ctx, get_zone_params().domain_root,
+			       oid, epbl, &info.objv_tracker, pmtime, pattrs,
+			       cache_info, refresh_version);
   if (ret < 0) {
     return ret;
   }
 
   bufferlist::iterator iter = epbl.begin();
   try {
-    ::decode(info, iter);
+    decode(info, iter);
   } catch (buffer::error& err) {
     ldout(cct, 0) << "ERROR: could not decode buffer info, caught buffer::error" << dendl;
     return -EIO;
@@ -11840,20 +11883,23 @@ int RGWRados::get_bucket_entrypoint_info(RGWObjectCtx& obj_ctx,
                                          RGWObjVersionTracker *objv_tracker,
                                          real_time *pmtime,
                                          map<string, bufferlist> *pattrs,
-                                         rgw_cache_entry_info *cache_info)
+                                         rgw_cache_entry_info *cache_info,
+					 boost::optional<obj_version> refresh_version)
 {
   bufferlist bl;
   string bucket_entry;
 
   rgw_make_bucket_entry_name(tenant_name, bucket_name, bucket_entry);
-  int ret = rgw_get_system_obj(this, obj_ctx, get_zone_params().domain_root, bucket_entry, bl, objv_tracker, pmtime, pattrs, cache_info);
+  int ret = rgw_get_system_obj(this, obj_ctx, get_zone_params().domain_root,
+			       bucket_entry, bl, objv_tracker, pmtime, pattrs,
+			       cache_info, refresh_version);
   if (ret < 0) {
     return ret;
   }
 
   bufferlist::iterator iter = bl.begin();
   try {
-    ::decode(entry_point, iter);
+    decode(entry_point, iter);
   } catch (buffer::error& err) {
     ldout(cct, 0) << "ERROR: could not decode buffer info, caught buffer::error" << dendl;
     return -EIO;
@@ -11907,32 +11953,35 @@ int RGWRados::_get_bucket_info(RGWObjectCtx& obj_ctx,
                                map<string, bufferlist> *pattrs,
                                boost::optional<obj_version> refresh_version)
 {
-  bucket_info_entry e;
   string bucket_entry;
   rgw_make_bucket_entry_name(tenant, bucket_name, bucket_entry);
 
 
-  if (binfo_cache->find(bucket_entry, &e)) {
+  if (auto e = binfo_cache->find(bucket_entry)) {
     if (refresh_version &&
-        e.info.objv_tracker.read_version.compare(&(*refresh_version))) {
+        e->info.objv_tracker.read_version.compare(&(*refresh_version))) {
       lderr(cct) << "WARNING: The bucket info cache is inconsistent. This is "
                  << "a failure that should be debugged. I am a nice machine, "
                  << "so I will try to recover." << dendl;
       binfo_cache->invalidate(bucket_entry);
+    } else {
+      info = e->info;
+      if (pattrs)
+	*pattrs = e->attrs;
+      if (pmtime)
+	*pmtime = e->mtime;
+      return 0;
     }
-    info = e.info;
-    if (pattrs)
-      *pattrs = e.attrs;
-    if (pmtime)
-      *pmtime = e.mtime;
-    return 0;
   }
 
+  bucket_info_entry e;
   RGWBucketEntryPoint entry_point;
   real_time ep_mtime;
   RGWObjVersionTracker ot;
   rgw_cache_entry_info entry_cache_info;
-  int ret = get_bucket_entrypoint_info(obj_ctx, tenant, bucket_name, entry_point, &ot, &ep_mtime, pattrs, &entry_cache_info);
+  int ret = get_bucket_entrypoint_info(obj_ctx, tenant, bucket_name,
+				       entry_point, &ot, &ep_mtime, pattrs,
+				       &entry_cache_info, refresh_version);
   if (ret < 0) {
     /* only init these fields */
     info.bucket.tenant = tenant;
@@ -11966,7 +12015,8 @@ int RGWRados::_get_bucket_info(RGWObjectCtx& obj_ctx,
 
   rgw_cache_entry_info cache_info;
 
-  ret = get_bucket_instance_from_oid(obj_ctx, oid, e.info, &e.mtime, &e.attrs, &cache_info);
+  ret = get_bucket_instance_from_oid(obj_ctx, oid, e.info, &e.mtime, &e.attrs,
+				     &cache_info, refresh_version);
   e.info.ep_objv = ot.read_version;
   info = e.info;
   if (ret < 0) {
@@ -11982,13 +12032,8 @@ int RGWRados::_get_bucket_info(RGWObjectCtx& obj_ctx,
   if (pattrs)
     *pattrs = e.attrs;
 
-  list<rgw_cache_entry_info *> cache_info_entries;
-  cache_info_entries.push_back(&entry_cache_info);
-  cache_info_entries.push_back(&cache_info);
-
-
   /* chain to both bucket entry point and bucket instance */
-  if (!binfo_cache->put(this, bucket_entry, &e, cache_info_entries)) {
+  if (!binfo_cache->put(this, bucket_entry, &e, {&entry_cache_info, &cache_info})) {
     ldout(cct, 20) << "couldn't put binfo cache entry, might have raced with data changes" << dendl;
   }
 
@@ -12026,7 +12071,7 @@ int RGWRados::put_bucket_entrypoint_info(const string& tenant_name, const string
                                          map<string, bufferlist> *pattrs)
 {
   bufferlist epbl;
-  ::encode(entry_point, epbl);
+  encode(entry_point, epbl);
   string bucket_entry;
   rgw_make_bucket_entry_name(tenant_name, bucket_name, bucket_entry);
   return rgw_bucket_store_info(this, bucket_entry, epbl, exclusive, pattrs, &objv_tracker, mtime);
@@ -12038,7 +12083,7 @@ int RGWRados::put_bucket_instance_info(RGWBucketInfo& info, bool exclusive,
   info.has_instance_obj = true;
   bufferlist bl;
 
-  ::encode(info, bl);
+  encode(info, bl);
 
   string key = info.bucket.get_key(); /* when we go through meta api, we don't use oid directly */
   int ret = rgw_bucket_instance_store_info(this, key, bl, exclusive, pattrs, &info.objv_tracker, mtime);
@@ -12555,7 +12600,7 @@ int RGWRados::bi_get_instance(const RGWBucketInfo& bucket_info, rgw_obj& obj, rg
   }
   bufferlist::iterator iter = bi_entry.data.begin();
   try {
-    ::decode(*dirent, iter);
+    decode(*dirent, iter);
   } catch (buffer::error& err) {
     ldout(cct, 0) << "ERROR: failed to decode bi_entry()" << dendl;
     return -EIO;
@@ -12973,7 +13018,7 @@ int RGWRados::remove_objs_from_index(RGWBucketInfo& bucket_info, list<rgw_obj_in
     dout(2) << "RGWRados::remove_objs_from_index bucket=" << bucket_info.bucket << " obj=" << entry.key.name << ":" << entry.key.instance << dendl;
     entry.ver.epoch = (uint64_t)-1; // ULLONG_MAX, needed to that objclass doesn't skip out request
     updates.append(CEPH_RGW_REMOVE | suggest_flag);
-    ::encode(entry, updates);
+    encode(entry, updates);
   }
 
   bufferlist out;
@@ -13925,7 +13970,7 @@ int rgw_compression_info_from_attrset(map<string, bufferlist>& attrs, bool& need
   if (value != attrs.end()) {
     bufferlist::iterator bliter = value->second.begin();
     try {
-      ::decode(cs_info, bliter);
+      decode(cs_info, bliter);
     } catch (buffer::error& err) {
       return -EIO;
     }

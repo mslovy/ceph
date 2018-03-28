@@ -21,7 +21,6 @@
 #include "common/Clock.h"
 #include "common/HeartbeatMap.h"
 #include "common/Timer.h"
-#include "common/backport_std.h"
 #include "common/ceph_argparse.h"
 #include "common/config.h"
 #include "common/entity_name.h"
@@ -1355,7 +1354,7 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
       bufferlist::iterator p = caps_info.caps.begin();
       string auth_cap_str;
       try {
-        ::decode(auth_cap_str, p);
+        decode(auth_cap_str, p);
 
         dout(10) << __func__ << ": parsing auth_cap_str='" << auth_cap_str << "'" << dendl;
         std::ostringstream errstr;

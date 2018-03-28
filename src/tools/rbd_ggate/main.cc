@@ -15,7 +15,7 @@
 #include <iostream>
 #include <memory>
 #include <boost/algorithm/string/predicate.hpp>
-#include <boost/regex.hpp>
+#include <regex>
 
 #include "common/Formatter.h"
 #include "common/Preforker.h"
@@ -253,9 +253,9 @@ static int do_unmap()
 
 static int parse_imgpath(const std::string &imgpath, std::string *poolname,
                          std::string *imgname, std::string *snapname) {
-  boost::regex pattern("^(?:([^/@]+)/)?([^/@]+)(?:@([^/@]+))?$");
-  boost::smatch match;
-  if (!boost::regex_match(imgpath, match, pattern)) {
+  std::regex pattern("^(?:([^/@]+)/)?([^/@]+)(?:@([^/@]+))?$");
+  std::smatch match;
+  if (!std::regex_match(imgpath, match, pattern)) {
     std::cerr << "rbd-ggate: invalid spec '" << imgpath << "'" << std::endl;
     return -EINVAL;
   }
@@ -336,7 +336,7 @@ static int do_list(const std::string &format, bool pretty_format)
   }
 
   if (f) {
-    f->open_object_section("devices");
+    f->open_array_section("devices");
   } else {
     tbl.define_column("id", TextTable::LEFT, TextTable::LEFT);
     tbl.define_column("pool", TextTable::LEFT, TextTable::LEFT);
@@ -361,7 +361,8 @@ static int do_list(const std::string &format, bool pretty_format)
     parse_imgpath(info.substr(4), &poolname, &imgname, &snapname);
 
     if (f) {
-      f->open_object_section(stringify(id).c_str());
+      f->open_object_section("device");
+      f->dump_string("id", id);
       f->dump_string("pool", poolname);
       f->dump_string("image", imgname);
       f->dump_string("snap", snapname);
@@ -396,7 +397,23 @@ int main(int argc, const char *argv[]) {
   vector<const char*> args;
 
   argv_to_vec(argc, argv, args);
-  md_config_t().parse_argv(args);
+
+  std::string conf_file_list;
+  std::string cluster;
+  CephInitParameters iparams = ceph_argparse_early_args(
+      args, CEPH_ENTITY_TYPE_CLIENT, &cluster, &conf_file_list);
+
+  md_config_t config;
+  config.name = iparams.name;
+  config.cluster = cluster;
+
+  if (!conf_file_list.empty()) {
+    config.parse_config_files(conf_file_list.c_str(), nullptr, 0);
+  } else {
+    config.parse_config_files(nullptr, nullptr, 0);
+  }
+  config.parse_env();
+  config.parse_argv(args);
 
   std::string format;
   bool pretty_format = false;

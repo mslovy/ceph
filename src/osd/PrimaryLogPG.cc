@@ -393,7 +393,7 @@ void PrimaryLogPG::on_local_recover(
       recovery_info.oi.prior_version = recovery_info.oi.version;
       recovery_info.oi.version = latest->version;
       bufferlist bl;
-      ::encode(recovery_info.oi, bl,
+      encode(recovery_info.oi, bl,
 	       get_osdmap()->get_features(CEPH_ENTITY_TYPE_OSD, nullptr));
       assert(!pool.info.is_erasure());
       t->setattr(coll, ghobject_t(recovery_info.soid), OI_ATTR, bl);
@@ -737,7 +737,7 @@ void PrimaryLogPG::maybe_force_recovery()
 		  PG_STATE_BACKFILL_TOOFULL))
     return;
 
-  if (pg_log.get_log().log.size() <
+  if (pg_log.get_log().approx_size() <
       cct->_conf->osd_max_pg_log_entries *
         cct->_conf->osd_force_recovery_pg_log_entries_factor)
     return;
@@ -755,8 +755,9 @@ void PrimaryLogPG::maybe_force_recovery()
        ++it) {
     if (*it == get_primary()) continue;
     pg_shard_t peer = *it;
-    if (peer_missing.count(peer) &&
-	!peer_missing[peer].get_rmissing().empty()) {
+    auto it_missing = peer_missing.find(peer);
+    if (it_missing != peer_missing.end() &&
+	!it_missing->second.get_rmissing().empty()) {
       const auto& min_obj = peer_missing[peer].get_rmissing().begin();
       dout(20) << __func__ << " peer " << peer << " min_version " << min_obj->first
                << " oid " << min_obj->second << dendl;
@@ -778,8 +779,8 @@ public:
   int init(bufferlist::iterator &params) override
   {
     try {
-      ::decode(xattr, params);
-      ::decode(val, params);
+      decode(xattr, params);
+      decode(val, params);
     } catch (buffer::error &e) {
       return -EINVAL;
     }
@@ -801,7 +802,7 @@ public:
   int init(bufferlist::iterator &params) override
   {
     try {
-      ::decode(parent_ino, params);
+      decode(parent_ino, params);
     } catch (buffer::error &e) {
       return -EINVAL;
     }
@@ -822,13 +823,13 @@ bool PGLSParentFilter::filter(const hobject_t &obj,
 
   generic_dout(0) << "PGLSParentFilter::filter" << dendl;
 
-  ::decode(bt, iter);
+  decode(bt, iter);
 
   vector<inode_backpointer_t>::iterator vi;
   for (vi = bt.ancestors.begin(); vi != bt.ancestors.end(); ++vi) {
     generic_dout(0) << "vi->dirino=" << vi->dirino << " parent_ino=" << parent_ino << dendl;
     if (vi->dirino == parent_ino) {
-      ::encode(*vi, outdata);
+      encode(*vi, outdata);
       return true;
     }
   }
@@ -875,7 +876,7 @@ int PrimaryLogPG::get_pgls_filter(bufferlist::iterator& iter, PGLSFilter **pfilt
   PGLSFilter *filter;
 
   try {
-    ::decode(type, iter);
+    decode(type, iter);
   }
   catch (buffer::error& e) {
     return -EINVAL;
@@ -959,6 +960,7 @@ int PrimaryLogPG::do_command(
     f->open_object_section("pg");
     f->dump_string("state", pg_state_string(get_state()));
     f->dump_stream("snap_trimq") << snap_trimq;
+    f->dump_unsigned("snap_trimq_len", snap_trimq.size());
     f->dump_unsigned("epoch", get_osdmap()->get_epoch());
     f->open_array_section("up");
     for (vector<int>::iterator p = up.begin(); p != up.end(); ++p)
@@ -1142,8 +1144,8 @@ void PrimaryLogPG::do_pg_op(OpRequestRef op)
     switch (p->op.op) {
     case CEPH_OSD_OP_PGNLS_FILTER:
       try {
-	::decode(cname, bp);
-	::decode(mname, bp);
+	decode(cname, bp);
+	decode(mname, bp);
       }
       catch (const buffer::error& e) {
 	dout(0) << "unable to decode PGLS_FILTER description in " << *m << dendl;
@@ -1173,14 +1175,16 @@ void PrimaryLogPG::do_pg_op(OpRequestRef op)
 		 << " != " << info.pgid << dendl;
 	result = 0; // hmm?
       } else {
-	unsigned list_size = MIN(cct->_conf->osd_max_pgls, p->op.pgls.count);
+	unsigned list_size = std::min<uint64_t>(cct->_conf->osd_max_pgls,
+						p->op.pgls.count);
 
-        dout(10) << " pgnls pg=" << m->get_pg() << " count " << list_size << dendl;
+        dout(10) << " pgnls pg=" << m->get_pg() << " count " << list_size
+		 << dendl;
 	// read into a buffer
         vector<hobject_t> sentries;
         pg_nls_response_t response;
 	try {
-	  ::decode(response.handle, bp);
+	  decode(response.handle, bp);
 	}
 	catch (const buffer::error& e) {
 	  dout(0) << "unable to decode PGNLS handle in " << *m << dendl;
@@ -1302,9 +1306,9 @@ void PrimaryLogPG::do_pg_op(OpRequestRef op)
           response.handle = next;
         }
         dout(10) << "pgnls handle=" << response.handle << dendl;
-	::encode(response, osd_op.outdata);
+	encode(response, osd_op.outdata);
 	if (filter)
-	  ::encode(filter_out, osd_op.outdata);
+	  encode(filter_out, osd_op.outdata);
 	dout(10) << " pgnls result=" << result << " outdata.length()="
 		 << osd_op.outdata.length() << dendl;
       }
@@ -1312,8 +1316,8 @@ void PrimaryLogPG::do_pg_op(OpRequestRef op)
 
     case CEPH_OSD_OP_PGLS_FILTER:
       try {
-	::decode(cname, bp);
-	::decode(mname, bp);
+	decode(cname, bp);
+	decode(mname, bp);
       }
       catch (const buffer::error& e) {
 	dout(0) << "unable to decode PGLS_FILTER description in " << *m << dendl;
@@ -1343,14 +1347,15 @@ void PrimaryLogPG::do_pg_op(OpRequestRef op)
 		 << " != " << info.pgid << dendl;
 	result = 0; // hmm?
       } else {
-	unsigned list_size = MIN(cct->_conf->osd_max_pgls, p->op.pgls.count);
+	unsigned list_size = std::min<uint64_t>(cct->_conf->osd_max_pgls,
+						p->op.pgls.count);
 
         dout(10) << " pgls pg=" << m->get_pg() << " count " << list_size << dendl;
 	// read into a buffer
         vector<hobject_t> sentries;
         pg_ls_response_t response;
 	try {
-	  ::decode(response.handle, bp);
+	  decode(response.handle, bp);
 	}
 	catch (const buffer::error& e) {
 	  dout(0) << "unable to decode PGLS handle in " << *m << dendl;
@@ -1436,9 +1441,9 @@ void PrimaryLogPG::do_pg_op(OpRequestRef op)
 	  result = 1;
 	}
 	response.handle = next;
-	::encode(response, osd_op.outdata);
+	encode(response, osd_op.outdata);
 	if (filter)
-	  ::encode(filter_out, osd_op.outdata);
+	  encode(filter_out, osd_op.outdata);
 	dout(10) << " pgls result=" << result << " outdata.length()="
 		 << osd_op.outdata.length() << dendl;
       }
@@ -1453,7 +1458,7 @@ void PrimaryLogPG::do_pg_op(OpRequestRef op)
 	  ls.push_back(make_pair(p->begin, p->end));
 	if (hit_set)
 	  ls.push_back(make_pair(hit_set_start_stamp, utime_t()));
-	::encode(ls, osd_op.outdata);
+	encode(ls, osd_op.outdata);
       }
       break;
 
@@ -1467,7 +1472,7 @@ void PrimaryLogPG::do_pg_op(OpRequestRef op)
 	    result= -ENOENT;
 	    break;
 	  }
-	  ::encode(*hit_set, osd_op.outdata);
+	  encode(*hit_set, osd_op.outdata);
 	  result = osd_op.outdata.length();
 	} else {
 	  // read an archived HitSet.
@@ -1554,7 +1559,7 @@ int PrimaryLogPG::do_scrub_ls(MOSDOp *m, OSDOp *osd_op)
 						    arg.start_after,
 						    arg.max_return);
   }
-  ::encode(result, osd_op->outdata);
+  encode(result, osd_op->outdata);
   return r;
 }
 
@@ -1570,14 +1575,13 @@ void PrimaryLogPG::calc_trim_to()
     target = cct->_conf->osd_max_pg_log_entries;
   }
 
-  eversion_t limit = MIN(
+  eversion_t limit = std::min(
     min_last_complete_ondisk,
     pg_log.get_can_rollback_to());
-  size_t log_size = pg_log.get_log().log.size();
   if (limit != eversion_t() &&
       limit != pg_trim_to &&
-      log_size > target) {
-    size_t num_to_trim = log_size - target;
+      pg_log.get_log().approx_size() > target) {
+    size_t num_to_trim = pg_log.get_log().approx_size() - target;
     if (num_to_trim < cct->_conf->osd_pg_log_trim_min) {
       return;
     }
@@ -2198,8 +2202,19 @@ void PrimaryLogPG::do_op(OpRequestRef& op)
         in_hit_set = true;
     }
     if (!op->hitset_inserted) {
-      hit_set->insert(oid);
       op->hitset_inserted = true;
+      if (hit_set->impl->get_type() == HitSet::TYPE_TEMP) {
+	if (op->get_reqid().name.is_client()){
+	  TempHitSet* th = static_cast<TempHitSet*>(hit_set->impl.get());
+	  bool exsited = obc.get() && obc->obs.exists;
+	  if (pool.info.is_tier())
+	    th->insert(oid, exsited);
+	  else
+	    th->insert(oid, exsited || can_create);
+	}
+      } else {
+        hit_set->insert(oid);
+      }
       if (hit_set->is_full() ||
           hit_set_start_stamp + pool.info.hit_set_period <= m->get_recv_stamp()) {
         hit_set_persist();
@@ -2383,6 +2398,11 @@ PrimaryLogPG::cache_result_t PrimaryLogPG::maybe_handle_manifest_detail(
   case object_manifest_t::TYPE_CHUNKED: 
     {
       if (can_proxy_chunked_read(op, obc)) {
+	map<hobject_t,FlushOpRef>::iterator p = flush_ops.find(obc->obs.oi.soid);
+        if (p != flush_ops.end()) {
+          do_proxy_chunked_op(op, obc->obs.oi.soid, obc, true);
+          return cache_result_t::HANDLED_PROXY;
+        }
 	do_proxy_chunked_op(op, obc->obs.oi.soid, obc, write_ordered);
 	return cache_result_t::HANDLED_PROXY;
       }
@@ -2412,6 +2432,16 @@ PrimaryLogPG::cache_result_t PrimaryLogPG::maybe_handle_manifest_detail(
 	  return cache_result_t::BLOCKED_PROMOTE;
 	}
       }
+
+      bool all_dirty = true;
+      for (auto& p : obc->obs.oi.manifest.chunk_map) {
+	if (p.second.flags != chunk_info_t::FLAG_DIRTY) {
+	  all_dirty = false;
+	}
+      }
+      if (all_dirty) {
+	start_flush(OpRequestRef(), obc, true, NULL, boost::none);
+      }
       return cache_result_t::NOOP;
     }
   default:
@@ -2419,6 +2449,167 @@ PrimaryLogPG::cache_result_t PrimaryLogPG::maybe_handle_manifest_detail(
   }
 
   return cache_result_t::NOOP;
+}
+
+struct C_ManifestFlush : public Context {
+  PrimaryLogPGRef pg;
+  hobject_t oid;
+  epoch_t last_peering_reset;
+  ceph_tid_t tid;
+  utime_t start;
+  uint64_t offset;
+  uint64_t last_offset;
+  C_ManifestFlush(PrimaryLogPG *p, hobject_t o, epoch_t lpr)
+    : pg(p), oid(o), last_peering_reset(lpr),
+      tid(0), start(ceph_clock_now())
+  {}
+  void finish(int r) override {
+    if (r == -ECANCELED)
+      return;
+    pg->lock();
+    pg->handle_manifest_flush(oid, tid, r, offset, last_offset);
+    pg->osd->logger->tinc(l_osd_tier_flush_lat, ceph_clock_now() - start);
+    pg->unlock();
+  }
+};
+
+void PrimaryLogPG::handle_manifest_flush(hobject_t oid, ceph_tid_t tid, int r,
+					 uint64_t offset, uint64_t last_offset)
+{
+  map<hobject_t,FlushOpRef>::iterator p = flush_ops.find(oid);
+  if (p == flush_ops.end()) {
+    dout(10) << __func__ << " no flush_op found" << dendl;
+    return;
+  }
+  if (p->second->rval < 0) {
+    return;
+  }
+  p->second->io_results[offset] = r;
+  for (auto &ior: p->second->io_results) {
+    if (ior.second < 0) {
+      finish_manifest_flush(oid, tid, r, p->second->obc, last_offset);
+      p->second->rval = r;
+      return;
+    }
+  }
+  if (p->second->chunks == p->second->io_results.size()) {
+    if (last_peering_reset == get_last_peering_reset()) {
+      assert(p->second->obc);
+      finish_manifest_flush(oid, tid, r, p->second->obc, last_offset);
+    }
+  }
+}
+
+int PrimaryLogPG::start_manifest_flush(OpRequestRef op, ObjectContextRef obc, bool blocking,
+				       boost::optional<std::function<void()>> &&on_flush)
+{
+  auto p = obc->obs.oi.manifest.chunk_map.begin();
+  FlushOpRef manifest_fop(std::make_shared<FlushOp>());
+  manifest_fop->op = op;
+  manifest_fop->obc = obc;
+  manifest_fop->flushed_version = obc->obs.oi.user_version;
+  manifest_fop->blocking = blocking;
+  manifest_fop->on_flush = std::move(on_flush);
+  int r = do_manifest_flush(op, obc, manifest_fop, p->first, blocking);
+  if (r < 0) {
+    return r;
+  }
+
+  flush_ops[obc->obs.oi.soid] = manifest_fop;
+  return -EINPROGRESS;
+}
+
+int PrimaryLogPG::do_manifest_flush(OpRequestRef op, ObjectContextRef obc, FlushOpRef manifest_fop,
+				    uint64_t start_offset, bool block)
+{
+  struct object_manifest_t &manifest = obc->obs.oi.manifest;
+  hobject_t soid = obc->obs.oi.soid;
+  ceph_tid_t tid;
+  SnapContext snapc;
+  uint64_t max_copy_size = 0, last_offset = 0;
+
+  map<uint64_t, chunk_info_t>::iterator iter = manifest.chunk_map.find(start_offset); 
+  assert(iter != manifest.chunk_map.end());
+  for (;iter != manifest.chunk_map.end(); ++iter) {
+    if (iter->second.flags == chunk_info_t::FLAG_DIRTY) {
+      last_offset = iter->first;
+      max_copy_size += iter->second.length;
+    }
+    if (get_copy_chunk_size() < max_copy_size) {
+      break;
+    }
+  }
+
+  iter = manifest.chunk_map.find(start_offset);
+  for (;iter != manifest.chunk_map.end(); ++iter) {
+    if (iter->second.flags != chunk_info_t::FLAG_DIRTY) {
+      continue;
+    }
+    uint64_t tgt_length = iter->second.length;
+    uint64_t tgt_offset= iter->second.offset;
+    hobject_t tgt_soid = iter->second.oid;
+    object_locator_t oloc(tgt_soid);
+    ObjectOperation obj_op;
+    bufferlist chunk_data;
+    int r = pgbackend->objects_read_sync(
+	soid, iter->first, tgt_length, 0, &chunk_data);
+    if (r < 0) {
+      dout(0) << __func__ << " read fail " << " offset: " << tgt_offset
+	      << " len: " << tgt_length << " r: " << r << dendl;
+      return r;
+    }
+    if (!chunk_data.length()) {
+      return -ENODATA;
+    }
+    tgt_length = chunk_data.length();
+    obj_op.add_data(CEPH_OSD_OP_WRITE, tgt_offset, tgt_length, chunk_data);
+
+    unsigned flags = CEPH_OSD_FLAG_IGNORE_CACHE | CEPH_OSD_FLAG_IGNORE_OVERLAY |
+		     CEPH_OSD_FLAG_RWORDERED ;
+    C_ManifestFlush *fin = new C_ManifestFlush(this, soid, get_last_peering_reset());
+    fin->offset = iter->first;
+    fin->last_offset = last_offset;
+    manifest_fop->chunks++;
+
+    unsigned n = info.pgid.hash_to_shard(osd->m_objecter_finishers);
+    tid = osd->objecter->mutate(
+      tgt_soid.oid, oloc, obj_op, snapc,
+      ceph::real_clock::from_ceph_timespec(obc->obs.oi.mtime),
+      flags, new C_OnFinisher(fin, osd->objecter_finishers[n]));
+    fin->tid = tid;
+    manifest_fop->io_tids[iter->first] = tid;
+
+    dout(20) << __func__ << " offset: " << tgt_offset << " len: " << tgt_length 
+	    << " oid: " << tgt_soid.oid << " ori oid: " << soid.oid.name 
+	    << " tid: " << tid << dendl;
+    if (last_offset < iter->first) {
+      break;
+    }
+  }
+
+  return 0;
+}
+
+void PrimaryLogPG::finish_manifest_flush(hobject_t oid, ceph_tid_t tid, int r,
+					 ObjectContextRef obc, uint64_t last_offset)
+{
+  dout(10) << __func__ << " " << oid << " tid " << tid
+	   << " " << cpp_strerror(r) << " last_offset: " << last_offset << dendl;
+  map<hobject_t,FlushOpRef>::iterator p = flush_ops.find(oid);
+  if (p == flush_ops.end()) {
+    dout(10) << __func__ << " no flush_op found" << dendl;
+    return;
+  }
+  map<uint64_t, chunk_info_t>::iterator iter = 
+      obc->obs.oi.manifest.chunk_map.find(last_offset); 
+  assert(iter != obc->obs.oi.manifest.chunk_map.end());
+  for (;iter != obc->obs.oi.manifest.chunk_map.end(); ++iter) {
+    if (iter->second.flags == chunk_info_t::FLAG_DIRTY && last_offset < iter->first) {
+      do_manifest_flush(p->second->op, obc, p->second, iter->first, p->second->blocking);
+      return;
+    }
+  }
+  finish_flush(oid, tid, r);
 }
 
 void PrimaryLogPG::record_write_error(OpRequestRef op, const hobject_t &soid,
@@ -2669,6 +2860,28 @@ PrimaryLogPG::cache_result_t PrimaryLogPG::maybe_handle_cache_detail(
     do_proxy_read(op);
     return cache_result_t::HANDLED_PROXY;
 
+  case pg_pool_t::CACHEMODE_SWAP:
+  {
+    if (must_promote ||
+        (agent_state->promote_mode == TierAgentState::PROMOTE_MODE_WARMING &&
+	 !op->need_skip_promote())) {
+      if (agent_state &&
+          agent_state->evict_mode == TierAgentState::EVICT_MODE_FULL) {
+        dout(20) << __func__ << " cache pool full, waiting" << dendl;
+        block_write_on_full_cache(missing_oid, op);
+        return cache_result_t::BLOCKED_FULL;
+      }
+      promote_object(obc, missing_oid, oloc, op, promote_obc);
+      return cache_result_t::BLOCKED_PROMOTE;
+    }
+    if (op->may_write() || op->may_cache() || write_ordered) {
+      do_proxy_write(op);
+    } else {
+      do_proxy_read(op);
+    }
+    return cache_result_t::HANDLED_PROXY;
+  }
+
   default:
     assert(0 == "unrecognized cache_mode");
   }
@@ -2896,7 +3109,8 @@ void PrimaryLogPG::do_proxy_read(OpRequestRef op, ObjectContextRef obc)
     flags, new C_OnFinisher(fin, osd->objecter_finishers[n]),
     &prdop->user_version,
     &prdop->data_offset,
-    m->get_features());
+    m->get_features(),
+    &prdop->temperature);
   fin->tid = tid;
   prdop->objecter_tid = tid;
   proxyread_ops[tid] = prdop;
@@ -2958,6 +3172,16 @@ void PrimaryLogPG::finish_proxy_read(hobject_t oid, ceph_tid_t tid, int r)
   ctx->data_off = prdop->data_offset;
   ctx->ignore_log_op_stats = true;
   complete_read_ctx(r, ctx);
+  if (pool.info.cache_mode == pg_pool_t::CACHEMODE_SWAP &&
+      prdop->temperature > agent_state->promote_temp &&
+      agent_state->promote_mode != TierAgentState::PROMOTE_MODE_FULL &&
+      !prdop->op->need_skip_promote()) {
+    ObjectContextRef obc = get_object_context(oid, false);
+    if (obc.get() && obc->is_blocked())
+      return;
+    const object_locator_t oloc = m->get_object_locator();
+    maybe_promote(ObjectContextRef(), oid, oloc, false, 0, OpRequestRef(), NULL);
+  }
 }
 
 void PrimaryLogPG::kick_proxy_ops_blocked(hobject_t& soid)
@@ -3089,7 +3313,7 @@ void PrimaryLogPG::do_proxy_write(OpRequestRef op, ObjectContextRef obc)
     soid.oid, oloc, obj_op, snapc,
     ceph::real_clock::from_ceph_timespec(pwop->mtime),
     flags, new C_OnFinisher(fin, osd->objecter_finishers[n]),
-    &pwop->user_version, pwop->reqid);
+    &pwop->user_version, pwop->reqid, &pwop->temperature);
   fin->tid = tid;
   pwop->objecter_tid = tid;
   proxywrite_ops[tid] = pwop;
@@ -3153,14 +3377,14 @@ void PrimaryLogPG::do_proxy_chunked_op(OpRequestRef op, const hobject_t& missing
       dout(20) << __func__ << " chunk_index: " << chunks->first 
 	      << " next_length: " << chunks->second << " cursor: " 
 	      << p.first << dendl;
-      do_proxy_chunked_read(op, obc, i, chunks->first, p.first, chunks->second, req_len);
+      do_proxy_chunked_read(op, obc, i, chunks->first, p.first, chunks->second, req_len, write_ordered);
     }
   } 
 }
 
 void PrimaryLogPG::do_proxy_chunked_read(OpRequestRef op, ObjectContextRef obc, int op_index,
 					 uint64_t chunk_index, uint64_t req_offset, uint64_t req_length,
-					 uint64_t req_total_len)
+					 uint64_t req_total_len, bool write_ordered)
 {
   MOSDOp *m = static_cast<MOSDOp*>(op->get_nonconst_req());
   object_manifest_t *manifest = &obc->obs.oi.manifest;
@@ -3172,6 +3396,9 @@ void PrimaryLogPG::do_proxy_chunked_read(OpRequestRef op, ObjectContextRef obc, 
   hobject_t ori_soid = m->get_hobj();
   object_locator_t oloc(soid);
   unsigned flags = CEPH_OSD_FLAG_IGNORE_CACHE | CEPH_OSD_FLAG_IGNORE_OVERLAY;
+  if (write_ordered) {
+    flags |= CEPH_OSD_FLAG_RWORDERED;
+  }
   
   if (!chunk_length || soid == hobject_t()) {
     return;
@@ -3335,6 +3562,17 @@ void PrimaryLogPG::finish_proxy_write(hobject_t oid, ceph_tid_t tid, int r)
 
   delete pwop->ctx;
   pwop->ctx = NULL;
+
+  if (pool.info.cache_mode == pg_pool_t::CACHEMODE_SWAP &&
+      pwop->temperature > agent_state->promote_temp &&
+      agent_state->promote_mode != TierAgentState::PROMOTE_MODE_FULL &&
+      !pwop->op->need_skip_promote()) {
+    ObjectContextRef obc = get_object_context(oid, false);
+    if (obc.get() && obc->is_blocked())
+      return;
+    const object_locator_t oloc = m->get_object_locator();
+    maybe_promote(ObjectContextRef(), oid, oloc, false, 0, OpRequestRef(), NULL);
+  }
 }
 
 void PrimaryLogPG::cancel_proxy_write(ProxyWriteOpRef pwop)
@@ -3586,6 +3824,11 @@ void PrimaryLogPG::execute_ctx(OpContext *ctx)
 
   ctx->reply->set_reply_versions(ctx->at_version, ctx->user_at_version);
 
+  if (hit_set && hit_set->impl->get_type() == HitSet::TYPE_TEMP) {
+    TempHitSet* th = static_cast<TempHitSet*>(hit_set->impl.get());
+    ctx->reply->set_temperature(th->get_temp(soid));
+  }
+
   assert(op->may_write() || op->may_cache());
 
   // trim log?
@@ -3666,7 +3909,7 @@ void PrimaryLogPG::execute_ctx(OpContext *ctx)
 	ConnectionRef());
     });
   ctx->register_on_finish(
-    [ctx, this]() {
+    [ctx]() {
       delete ctx;
     });
 
@@ -3795,7 +4038,7 @@ void PrimaryLogPG::do_scan(
 	pg_whoami,
 	get_osdmap()->get_epoch(), m->query_epoch,
 	spg_t(info.pgid.pgid, get_primary().shard), bi.begin, bi.end);
-      ::encode(bi.objects, reply->get_data());
+      encode(bi.objects, reply->get_data());
       osd->send_message_osd_cluster(reply, m->get_connection());
     }
     break;
@@ -4065,7 +4308,7 @@ int PrimaryLogPG::trim_object(
     coi.prior_version = coi.version;
     coi.version = ctx->at_version;
     bl.clear();
-    ::encode(coi, bl, get_osdmap()->get_features(CEPH_ENTITY_TYPE_OSD, nullptr));
+    encode(coi, bl, get_osdmap()->get_features(CEPH_ENTITY_TYPE_OSD, nullptr));
     t->setattr(coid, OI_ATTR, bl);
 
     ctx->log.push_back(
@@ -4150,11 +4393,11 @@ int PrimaryLogPG::trim_object(
 
     map <string, bufferlist> attrs;
     bl.clear();
-    ::encode(snapset, bl);
+    encode(snapset, bl);
     attrs[SS_ATTR].claim(bl);
 
     bl.clear();
-    ::encode(head_obc->obs.oi, bl,
+    encode(head_obc->obs.oi, bl,
 	     get_osdmap()->get_features(CEPH_ENTITY_TYPE_OSD, nullptr));
     attrs[OI_ATTR].claim(bl);
     t->setattrs(head_oid, attrs);
@@ -4325,8 +4568,8 @@ int PrimaryLogPG::do_tmapup_slow(OpContext *ctx, bufferlist::iterator& bp, OSDOp
   map<string, bufferlist> m;
   if (bl.length()) {
     bufferlist::iterator p = bl.begin();
-    ::decode(header, p);
-    ::decode(m, p);
+    decode(header, p);
+    decode(m, p);
     assert(p.end());
   }
 
@@ -4334,31 +4577,31 @@ int PrimaryLogPG::do_tmapup_slow(OpContext *ctx, bufferlist::iterator& bp, OSDOp
   while (!bp.end()) {
     __u8 op;
     string key;
-    ::decode(op, bp);
+    decode(op, bp);
 
     switch (op) {
     case CEPH_OSD_TMAP_SET: // insert key
       {
-	::decode(key, bp);
+	decode(key, bp);
 	bufferlist data;
-	::decode(data, bp);
+	decode(data, bp);
 	m[key] = data;
       }
       break;
     case CEPH_OSD_TMAP_RM: // remove key
-      ::decode(key, bp);
+      decode(key, bp);
       if (!m.count(key)) {
 	return -ENOENT;
       }
       m.erase(key);
       break;
     case CEPH_OSD_TMAP_RMSLOPPY: // remove key
-      ::decode(key, bp);
+      decode(key, bp);
       m.erase(key);
       break;
     case CEPH_OSD_TMAP_HDR: // update header
       {
-	::decode(header, bp);
+	decode(header, bp);
       }
       break;
     default:
@@ -4368,8 +4611,8 @@ int PrimaryLogPG::do_tmapup_slow(OpContext *ctx, bufferlist::iterator& bp, OSDOp
 
   // reencode
   bufferlist obl;
-  ::encode(header, obl);
-  ::encode(m, obl);
+  encode(header, obl);
+  encode(m, obl);
 
   // write it out
   vector<OSDOp> nops(1);
@@ -4415,18 +4658,18 @@ int PrimaryLogPG::do_tmapup(OpContext *ctx, bufferlist::iterator& bp, OSDOp& osd
     bufferlist header;
     __u32 nkeys = 0;
     if (newop.outdata.length()) {
-      ::decode(header, ip);
-      ::decode(nkeys, ip);
+      decode(header, ip);
+      decode(nkeys, ip);
     }
     dout(10) << "tmapup header " << header.length() << dendl;
 
     if (!bp.end() && *bp == CEPH_OSD_TMAP_HDR) {
       ++bp;
-      ::decode(header, bp);
+      decode(header, bp);
       dout(10) << "tmapup new header " << header.length() << dendl;
     }
 
-    ::encode(header, obl);
+    encode(header, obl);
 
     dout(20) << "tmapup initial nkeys " << nkeys << dendl;
 
@@ -4437,15 +4680,15 @@ int PrimaryLogPG::do_tmapup(OpContext *ctx, bufferlist::iterator& bp, OSDOp& osd
     bool have_next = false;
     if (!ip.end()) {
       have_next = true;
-      ::decode(nextkey, ip);
-      ::decode(nextval, ip);
+      decode(nextkey, ip);
+      decode(nextval, ip);
     }
     while (!bp.end() && !result) {
       __u8 op;
       string key;
       try {
-	::decode(op, bp);
-	::decode(key, bp);
+	decode(op, bp);
+	decode(key, bp);
       }
       catch (buffer::error& e) {
 	return -EINVAL;
@@ -4468,8 +4711,8 @@ int PrimaryLogPG::do_tmapup(OpContext *ctx, bufferlist::iterator& bp, OSDOp& osd
 	  break;
 	if (nextkey < key) {
 	  // copy untouched.
-	  ::encode(nextkey, newkeydata);
-	  ::encode(nextval, newkeydata);
+	  encode(nextkey, newkeydata);
+	  encode(nextval, newkeydata);
 	  dout(20) << "  keep " << nextkey << " " << nextval.length() << dendl;
 	} else {
 	  // don't copy; discard old value.  and stop.
@@ -4478,8 +4721,8 @@ int PrimaryLogPG::do_tmapup(OpContext *ctx, bufferlist::iterator& bp, OSDOp& osd
 	  nkeys--;
 	}
 	if (!ip.end()) {
-	  ::decode(nextkey, ip);
-	  ::decode(nextval, ip);
+	  decode(nextkey, ip);
+	  decode(nextval, ip);
 	} else {
 	  have_next = false;
 	}
@@ -4488,13 +4731,13 @@ int PrimaryLogPG::do_tmapup(OpContext *ctx, bufferlist::iterator& bp, OSDOp& osd
       if (op == CEPH_OSD_TMAP_SET) {
 	bufferlist val;
 	try {
-	  ::decode(val, bp);
+	  decode(val, bp);
 	}
 	catch (buffer::error& e) {
 	  return -EINVAL;
 	}
-	::encode(key, newkeydata);
-	::encode(val, newkeydata);
+	encode(key, newkeydata);
+	encode(val, newkeydata);
 	dout(20) << "   set " << key << " " << val.length() << dendl;
 	nkeys++;
       } else if (op == CEPH_OSD_TMAP_CREATE) {
@@ -4503,13 +4746,13 @@ int PrimaryLogPG::do_tmapup(OpContext *ctx, bufferlist::iterator& bp, OSDOp& osd
 	}
 	bufferlist val;
 	try {
-	  ::decode(val, bp);
+	  decode(val, bp);
 	}
 	catch (buffer::error& e) {
 	  return -EINVAL;
 	}
-	::encode(key, newkeydata);
-	::encode(val, newkeydata);
+	encode(key, newkeydata);
+	encode(val, newkeydata);
 	dout(20) << "   create " << key << " " << val.length() << dendl;
 	nkeys++;
       } else if (op == CEPH_OSD_TMAP_RM) {
@@ -4527,8 +4770,8 @@ int PrimaryLogPG::do_tmapup(OpContext *ctx, bufferlist::iterator& bp, OSDOp& osd
 
     // copy remaining
     if (have_next) {
-      ::encode(nextkey, newkeydata);
-      ::encode(nextval, newkeydata);
+      encode(nextkey, newkeydata);
+      encode(nextval, newkeydata);
       dout(20) << "  keep " << nextkey << " " << nextval.length() << dendl;
     }
     if (!ip.end()) {
@@ -4541,7 +4784,7 @@ int PrimaryLogPG::do_tmapup(OpContext *ctx, bufferlist::iterator& bp, OSDOp& osd
 
     // encode final key count + key data
     dout(20) << "tmapup final nkeys " << nkeys << dendl;
-    ::encode(nkeys, obl);
+    encode(nkeys, obl);
     obl.claim_append(newkeydata);
 
     if (0) {
@@ -4552,9 +4795,9 @@ int PrimaryLogPG::do_tmapup(OpContext *ctx, bufferlist::iterator& bp, OSDOp& osd
       // sanity check
       bufferlist::iterator tp = obl.begin();
       bufferlist h;
-      ::decode(h, tp);
+      decode(h, tp);
       map<string,bufferlist> d;
-      ::decode(d, tp);
+      decode(d, tp);
       assert(tp.end());
       dout(0) << " **** debug sanity check, looks ok ****" << dendl;
     }
@@ -4580,8 +4823,8 @@ static int check_offset_and_length(uint64_t offset, uint64_t length,
       length > max ||
       offset + length > max) {
     ldpp_dout(dpp, 10) << __func__ << " "
-      << "osd_max_object_size >= 4GB; Hard limit of object size is 4GB.\n"
-      << dendl;
+      << "osd_max_object_size: " << max
+      << "; Hard limit of object size is 4GB." << dendl;
     return -EFBIG;
   }
 
@@ -4643,7 +4886,7 @@ struct ToSparseReadResult : public Context {
     *len = r;
     bufferlist outdata;
     map<uint64_t, uint64_t> extents = {{data_offset, r}};
-    ::encode(extents, outdata);
+    encode(extents, outdata);
     ::encode_destructively(*data_bl, outdata);
     data_bl->swap(outdata);
   }
@@ -4884,7 +5127,7 @@ int PrimaryLogPG::finish_checksum(OSDOp& osd_op,
     case Checksummer::CSUM_XXHASH32:
       {
         Checksummer::xxhash32::init_value_t init_value;
-        ::decode(init_value, *init_value_bl_it);
+        decode(init_value, *init_value_bl_it);
         Checksummer::calculate<Checksummer::xxhash32>(
 	  init_value, csum_chunk_size, 0, read_bl.length(), read_bl,
 	  &csum_data);
@@ -4893,7 +5136,7 @@ int PrimaryLogPG::finish_checksum(OSDOp& osd_op,
     case Checksummer::CSUM_XXHASH64:
       {
         Checksummer::xxhash64::init_value_t init_value;
-        ::decode(init_value, *init_value_bl_it);
+        decode(init_value, *init_value_bl_it);
         Checksummer::calculate<Checksummer::xxhash64>(
 	  init_value, csum_chunk_size, 0, read_bl.length(), read_bl,
 	  &csum_data);
@@ -4902,7 +5145,7 @@ int PrimaryLogPG::finish_checksum(OSDOp& osd_op,
     case Checksummer::CSUM_CRC32C:
       {
         Checksummer::crc32c::init_value_t init_value;
-        ::decode(init_value, *init_value_bl_it);
+        decode(init_value, *init_value_bl_it);
         Checksummer::calculate<Checksummer::crc32c>(
   	  init_value, csum_chunk_size, 0, read_bl.length(), read_bl,
 	  &csum_data);
@@ -4913,7 +5156,7 @@ int PrimaryLogPG::finish_checksum(OSDOp& osd_op,
     }
   }
 
-  ::encode(csum_count, osd_op.outdata);
+  encode(csum_count, osd_op.outdata);
   osd_op.outdata.claim_append(csum);
   return 0;
 }
@@ -5063,7 +5306,9 @@ int PrimaryLogPG::do_read(OpContext *ctx, OSDOp& osd_op) {
     // a read operation of 0 bytes does *not* do nothing, this is why
     // the trimmed_read boolean is needed
   } else if (pool.info.is_erasure()) {
-    boost::optional<uint32_t> maybe_crc;
+    // The initialisation below is required to silence a false positive
+    // -Wmaybe-uninitialized warning
+    boost::optional<uint32_t> maybe_crc = boost::make_optional(false, uint32_t());
     // If there is a data digest and it is possible we are reading
     // entire object, pass the digest.  FillInVerifyExtent will
     // will check the oi.size again.
@@ -5110,7 +5355,7 @@ int PrimaryLogPG::do_read(OpContext *ctx, OSDOp& osd_op) {
 
   // XXX the op.extent.length is the requested length for async read
   // On error this length is changed to 0 after the error comes back.
-  ctx->delta_stats.num_rd_kb += SHIFT_ROUND_UP(op.extent.length, 10);
+  ctx->delta_stats.num_rd_kb += shift_round_up(op.extent.length, 10);
   ctx->delta_stats.num_rd++;
   return result;
 }
@@ -5152,7 +5397,7 @@ int PrimaryLogPG::do_sparse_read(OpContext *ctx, OSDOp& osd_op) {
     } else {
       dout(10) << " sparse read ended up empty for " << soid << dendl;
       map<uint64_t, uint64_t> extents;
-      ::encode(extents, osd_op.outdata);
+      encode(extents, osd_op.outdata);
     }
   } else {
     // read into a buffer
@@ -5209,7 +5454,8 @@ int PrimaryLogPG::do_sparse_read(OpContext *ctx, OSDOp& osd_op) {
 
     // verify trailing hole?
     if (cct->_conf->osd_verify_sparse_read_holes) {
-      uint64_t end = MIN(op.extent.offset + op.extent.length, oi.size);
+      uint64_t end = std::min<uint64_t>(op.extent.offset + op.extent.length,
+					oi.size);
       if (last < end) {
         bufferlist t;
         uint64_t len = end - last;
@@ -5243,14 +5489,14 @@ int PrimaryLogPG::do_sparse_read(OpContext *ctx, OSDOp& osd_op) {
 
     op.extent.length = total_read;
 
-    ::encode(m, osd_op.outdata); // re-encode since it might be modified
+    encode(m, osd_op.outdata); // re-encode since it might be modified
     ::encode_destructively(data_bl, osd_op.outdata);
 
     dout(10) << " sparse_read got " << total_read << " bytes from object "
 	     << soid << dendl;
   }
 
-  ctx->delta_stats.num_rd_kb += SHIFT_ROUND_UP(op.extent.length, 10);
+  ctx->delta_stats.num_rd_kb += shift_round_up(op.extent.length, 10);
   ctx->delta_stats.num_rd++;
   return 0;
 }
@@ -5268,21 +5514,6 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
     "osd_max_object_size");
 
   PGTransaction* t = ctx->op_t.get();
-  if (!oi.has_extents() &&
-      get_osdmap()->require_osd_release >= CEPH_RELEASE_MIMIC) {
-    assert(oi.extents.empty());
-    // note that this is ok because:
-    // 1. for reads, this should have no effect
-    // 2. for writes, we check if this is a pre-mimic created object
-    //    (with FLAG_EXTENTS off). And if it is, we set FLAG_EXTENTS
-    //    and initialize extents with a whole entry - [0, oi.size) only
-    //    to make sure we have oi.extents.size() == oi.size at the very
-    //    beginning, which is necessary for backward compatibility.
-    oi.set_flag(object_info_t::FLAG_EXTENTS);
-    if (oi.size) {
-      oi.extents.insert(0, oi.size);
-    }
-  }
 
   dout(10) << "do_osd_op " << soid << " " << ops << dendl;
 
@@ -5425,7 +5656,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	if (r < 0)
 	  result = r;
 	else
-	  ctx->delta_stats.num_rd_kb += SHIFT_ROUND_UP(bl.length(), 10);
+	  ctx->delta_stats.num_rd_kb += shift_round_up(bl.length(), 10);
 	ctx->delta_stats.num_rd++;
 	dout(10) << " map_extents done on object " << soid << dendl;
       }
@@ -5510,8 +5741,8 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	tracepoint(osd, do_osd_op_pre_stat, soid.oid.name.c_str(), soid.snap.val);
 
 	if (obs.exists && !oi.is_whiteout()) {
-	  ::encode(oi.size, osd_op.outdata);
-	  ::encode(oi.mtime, osd_op.outdata);
+	  encode(oi.size, osd_op.outdata);
+	  encode(oi.mtime, osd_op.outdata);
 	  dout(10) << "stat oi has " << oi.size << " " << oi.mtime << dendl;
 	} else {
 	  result = -ENOENT;
@@ -5527,7 +5758,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
       {
 	tracepoint(osd, do_osd_op_pre_isdirty, soid.oid.name.c_str(), soid.snap.val);
 	bool is_dirty = obs.oi.is_dirty();
-	::encode(is_dirty, osd_op.outdata);
+	encode(is_dirty, osd_op.outdata);
 	ctx->delta_stats.num_rd++;
 	result = 0;
       }
@@ -5673,7 +5904,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	if (r >= 0) {
 	  op.xattr.value_len = osd_op.outdata.length();
 	  result = 0;
-	  ctx->delta_stats.num_rd_kb += SHIFT_ROUND_UP(osd_op.outdata.length(), 10);
+	  ctx->delta_stats.num_rd_kb += shift_round_up(osd_op.outdata.length(), 10);
 	} else
 	  result = r;
 
@@ -5691,8 +5922,8 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	  &out);
         
         bufferlist bl;
-        ::encode(out, bl);
-	ctx->delta_stats.num_rd_kb += SHIFT_ROUND_UP(bl.length(), 10);
+        encode(out, bl);
+	ctx->delta_stats.num_rd_kb += shift_round_up(bl.length(), 10);
         ctx->delta_stats.num_rd++;
         osd_op.outdata.claim_append(bl);
       }
@@ -5716,7 +5947,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	  break;
 	
 	ctx->delta_stats.num_rd++;
-	ctx->delta_stats.num_rd_kb += SHIFT_ROUND_UP(xattr.length(), 10);
+	ctx->delta_stats.num_rd_kb += shift_round_up(xattr.length(), 10);
 
 	switch (op.xattr.cmp_mode) {
 	case CEPH_OSD_CMPXATTR_MODE_STRING:
@@ -5734,7 +5965,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	  {
 	    uint64_t u64val;
 	    try {
-	      ::decode(u64val, bp);
+	      decode(u64val, bp);
 	    }
 	    catch (buffer::error& e) {
 	      result = -EINVAL;
@@ -5904,9 +6135,9 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 
 	try {
 	  uint32_t ver; // obsolete
-          ::decode(ver, bp);
-	  ::decode(timeout, bp);
-          ::decode(bl, bp);
+          decode(ver, bp);
+	  decode(timeout, bp);
+          decode(bl, bp);
 	} catch (const buffer::error &e) {
 	  timeout = 0;
 	}
@@ -5922,7 +6153,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	ctx->notifies.push_back(n);
 
 	// return our unique notify id to the client
-	::encode(n.notify_id, osd_op.outdata);
+	encode(n.notify_id, osd_op.outdata);
       }
       break;
 
@@ -5932,11 +6163,11 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	try {
 	  uint64_t notify_id = 0;
 	  uint64_t watch_cookie = 0;
-	  ::decode(notify_id, bp);
-	  ::decode(watch_cookie, bp);
+	  decode(notify_id, bp);
+	  decode(watch_cookie, bp);
 	  bufferlist reply_bl;
 	  if (!bp.end()) {
-	    ::decode(reply_bl, bp);
+	    decode(reply_bl, bp);
 	  }
 	  tracepoint(osd, do_osd_op_pre_notify_ack, soid.oid.name.c_str(), soid.snap.val, notify_id, watch_cookie, "Y");
 	  OpContext::NotifyAck ack(notify_id, watch_cookie, reply_bl);
@@ -6144,15 +6375,6 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	  ctx->modified_ranges.union_of(ch);
 	  ctx->delta_stats.num_wr++;
 	  oi.clear_data_digest();
-          if (oi.has_extents()) {
-            int64_t old_bytes = oi.extents.size();
-            interval_set<uint64_t> to_remove;
-            to_remove.subset_of(oi.extents, op.extent.offset,
-                                op.extent.offset + op.extent.length);
-            oi.extents.subtract(to_remove);
-            int64_t new_bytes = oi.extents.size();
-            ctx->delta_stats.num_bytes += new_bytes - old_bytes;
-          }
 	} else {
 	  // no-op
 	}
@@ -6171,7 +6393,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	    bufferlist::iterator p = osd_op.indata.begin();
 	    string category;
 	    try {
-	      ::decode(category, p);
+	      decode(category, p);
 	    }
 	    catch (buffer::error& e) {
 	      result = -EINVAL;
@@ -6402,8 +6624,8 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	snapid_t target_snapid = (uint64_t)op.copy_from.snapid;
 	version_t target_version = op.copy_from.src_version;
 	try {
-	  ::decode(target_name, bp);
-	  ::decode(target_oloc, bp);
+	  decode(target_name, bp);
+	  decode(target_oloc, bp);
 	}
 	catch (buffer::error& e) {
 	  result = -EINVAL;
@@ -6428,12 +6650,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	  obs.oi.clear_omap_digest();
 	  obs.oi.clear_flag(object_info_t::FLAG_OMAP);
 	}
-        if (oi.has_extents()) {
-          ctx->delta_stats.num_bytes -= oi.extents.size();
-          oi.extents.clear();
-        } else {
-          ctx->delta_stats.num_bytes -= oi.size;
-        }
+        ctx->delta_stats.num_bytes -= oi.size;
 	oi.size = 0;
 	oi.new_object();
 	oi.user_version = target_version;
@@ -6475,11 +6692,11 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	uint64_t src_offset, src_length, tgt_offset;
 	object_t tgt_name;
 	try {
-	  ::decode(src_offset, bp);
-	  ::decode(src_length, bp);
-	  ::decode(tgt_oloc, bp);
-	  ::decode(tgt_name, bp);
-	  ::decode(tgt_offset, bp);
+	  decode(src_offset, bp);
+	  decode(src_length, bp);
+	  decode(tgt_oloc, bp);
+	  decode(tgt_name, bp);
+	  decode(tgt_offset, bp);
 	}
 	catch (buffer::error& e) {
 	  result = -EINVAL;
@@ -6538,8 +6755,9 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	  result = -EFBIG;
 	  break;
 	}
-	unsigned max_name_len = MIN(osd->store->get_max_attr_name_length(),
-				    cct->_conf->osd_max_attr_name_len);
+	unsigned max_name_len =
+	  std::min<uint64_t>(osd->store->get_max_attr_name_length(),
+			     cct->_conf->osd_max_attr_name_len);
 	if (op.xattr.name_len > max_name_len) {
 	  result = -ENAMETOOLONG;
 	  break;
@@ -6628,16 +6846,16 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	bool unsorted = false;
 	if (true) {
 	  bufferlist header;
-	  ::decode(header, bp);
+	  decode(header, bp);
 	  uint32_t n;
-	  ::decode(n, bp);
+	  decode(n, bp);
 	  string last_key;
 	  while (n--) {
 	    string key;
-	    ::decode(key, bp);
+	    decode(key, bp);
 	    dout(10) << "tmapput key " << key << dendl;
 	    bufferlist val;
-	    ::decode(val, bp);
+	    decode(val, bp);
 	    if (key < last_key) {
 	      dout(10) << "TMAPPUT is unordered; resorting" << dendl;
 	      unsorted = true;
@@ -6659,12 +6877,12 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	  bp = osd_op.indata.begin();
 	  bufferlist header;
 	  map<string, bufferlist> m;
-	  ::decode(header, bp);
-	  ::decode(m, bp);
+	  decode(header, bp);
+	  decode(m, bp);
 	  assert(bp.end());
 	  bufferlist newbl;
-	  ::encode(header, newbl);
-	  ::encode(m, newbl);
+	  encode(header, newbl);
+	  encode(m, newbl);
 	  newop.indata = newbl;
 	}
 	result = do_osd_ops(ctx, nops);
@@ -6695,8 +6913,8 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	string start_after;
 	uint64_t max_return;
 	try {
-	  ::decode(start_after, bp);
-	  ::decode(max_return, bp);
+	  decode(start_after, bp);
+	  decode(max_return, bp);
 	}
 	catch (buffer::error& e) {
 	  result = -EINVAL;
@@ -6723,13 +6941,13 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	      truncated = true;
 	      break;
 	    }
-	    ::encode(iter->key(), bl);
+	    encode(iter->key(), bl);
 	  }
 	} // else return empty out_set
-	::encode(num, osd_op.outdata);
+	encode(num, osd_op.outdata);
 	osd_op.outdata.claim_append(bl);
-	::encode(truncated, osd_op.outdata);
-	ctx->delta_stats.num_rd_kb += SHIFT_ROUND_UP(osd_op.outdata.length(), 10);
+	encode(truncated, osd_op.outdata);
+	ctx->delta_stats.num_rd_kb += shift_round_up(osd_op.outdata.length(), 10);
 	ctx->delta_stats.num_rd++;
       }
       break;
@@ -6741,9 +6959,9 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	uint64_t max_return;
 	string filter_prefix;
 	try {
-	  ::decode(start_after, bp);
-	  ::decode(max_return, bp);
-	  ::decode(filter_prefix, bp);
+	  decode(start_after, bp);
+	  decode(max_return, bp);
+	  decode(filter_prefix, bp);
 	}
 	catch (buffer::error& e) {
 	  result = -EINVAL;
@@ -6778,14 +6996,14 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	      truncated = true;
 	      break;
 	    }
-	    ::encode(iter->key(), bl);
-	    ::encode(iter->value(), bl);
+	    encode(iter->key(), bl);
+	    encode(iter->value(), bl);
 	  }
 	} // else return empty out_set
-	::encode(num, osd_op.outdata);
+	encode(num, osd_op.outdata);
 	osd_op.outdata.claim_append(bl);
-	::encode(truncated, osd_op.outdata);
-	ctx->delta_stats.num_rd_kb += SHIFT_ROUND_UP(osd_op.outdata.length(), 10);
+	encode(truncated, osd_op.outdata);
+	ctx->delta_stats.num_rd_kb += shift_round_up(osd_op.outdata.length(), 10);
 	ctx->delta_stats.num_rd++;
       }
       break;
@@ -6799,7 +7017,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
       ++ctx->num_read;
       {
 	osd->store->omap_get_header(ch, ghobject_t(soid), &osd_op.outdata);
-	ctx->delta_stats.num_rd_kb += SHIFT_ROUND_UP(osd_op.outdata.length(), 10);
+	ctx->delta_stats.num_rd_kb += shift_round_up(osd_op.outdata.length(), 10);
 	ctx->delta_stats.num_rd++;
       }
       break;
@@ -6809,7 +7027,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
       {
 	set<string> keys_to_get;
 	try {
-	  ::decode(keys_to_get, bp);
+	  decode(keys_to_get, bp);
 	}
 	catch (buffer::error& e) {
 	  result = -EINVAL;
@@ -6821,8 +7039,8 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	if (oi.is_omap()) {
 	  osd->store->omap_get_values(ch, ghobject_t(soid), keys_to_get, &out);
 	} // else return empty omap entries
-	::encode(out, osd_op.outdata);
-	ctx->delta_stats.num_rd_kb += SHIFT_ROUND_UP(osd_op.outdata.length(), 10);
+	encode(out, osd_op.outdata);
+	ctx->delta_stats.num_rd_kb += shift_round_up(osd_op.outdata.length(), 10);
 	ctx->delta_stats.num_rd++;
       }
       break;
@@ -6837,7 +7055,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	}
 	map<string, pair<bufferlist, int> > assertions;
 	try {
-	  ::decode(assertions, bp);
+	  decode(assertions, bp);
 	}
 	catch (buffer::error& e) {
 	  result = -EINVAL;
@@ -6926,7 +7144,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	  dout(20) << "setting vals: " << dendl;
 	  map<string,bufferlist> to_set;
 	  bufferlist::iterator pt = to_set_bl.begin();
-	  ::decode(to_set, pt);
+	  decode(to_set, pt);
 	  for (map<string, bufferlist>::iterator i = to_set.begin();
 	       i != to_set.end();
 	       ++i) {
@@ -6935,7 +7153,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	}
 	t->omap_setkeys(soid, to_set_bl);
 	ctx->delta_stats.num_wr++;
-        ctx->delta_stats.num_wr_kb += SHIFT_ROUND_UP(to_set_bl.length(), 10);
+        ctx->delta_stats.num_wr_kb += shift_round_up(to_set_bl.length(), 10);
       }
       obs.oi.set_flag(object_info_t::FLAG_OMAP);
       obs.oi.clear_omap_digest();
@@ -7026,8 +7244,8 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	snapid_t src_snapid = (uint64_t)op.copy_from.snapid;
 	version_t src_version = op.copy_from.src_version;
 	try {
-	  ::decode(src_name, bp);
-	  ::decode(src_oloc, bp);
+	  decode(src_name, bp);
+	  decode(src_oloc, bp);
 	}
 	catch (buffer::error& e) {
 	  result = -EINVAL;
@@ -7120,7 +7338,7 @@ int PrimaryLogPG::_get_tmap(OpContext *ctx, bufferlist *header, bufferlist *vals
   do_osd_ops(ctx, nops);
   try {
     bufferlist::iterator i = newop.outdata.begin();
-    ::decode(*header, i);
+    decode(*header, i);
     (*vals).substr_of(newop.outdata, i.get_off(), i.get_remaining());
   } catch (...) {
     dout(20) << "unsuccessful at decoding tmap for " << ctx->new_obs.oi.soid
@@ -7213,15 +7431,17 @@ inline int PrimaryLogPG::_delete_oid(
     assert(ctx->obc->ssc->snapset.clone_overlap.count(soid.snap));
     ctx->delta_stats.num_bytes -= ctx->obc->ssc->snapset.get_clone_bytes(soid.snap);
   } else {
-    if (oi.has_extents()) {
-      ctx->delta_stats.num_bytes -= oi.extents.size();
-      oi.extents.clear();
-    } else {
-      ctx->delta_stats.num_bytes -= oi.size;
-    }
+    ctx->delta_stats.num_bytes -= oi.size;
   }
   oi.size = 0;
   oi.new_object();
+
+  // remove object in hit set
+  if (hit_set && hit_set->impl->get_type() == HitSet::TYPE_TEMP &&
+      !whiteout) {
+    TempHitSet* th = static_cast<TempHitSet*>(hit_set->impl.get());
+    th->evict(soid);
+  }
 
   // disconnect all watchers
   for (map<pair<uint64_t, entity_name_t>, watch_info_t>::iterator p =
@@ -7381,23 +7601,8 @@ int PrimaryLogPG::_rollback_to(OpContext *ctx, ceph_osd_op& op)
 
       // Adjust the cached objectcontext
       maybe_create_new_object(ctx, true);
-      if (obs.oi.has_extents()) {
-        ctx->delta_stats.num_bytes -= obs.oi.extents.size();
-        obs.oi.extents.clear();
-      } else {
-        ctx->delta_stats.num_bytes -= obs.oi.size;
-      }
-      if (rollback_to->obs.oi.has_extents()) {
-        ctx->delta_stats.num_bytes += rollback_to->obs.oi.extents.size();
-        // transfer extents map too
-        assert(obs.oi.has_extents());
-        obs.oi.extents = rollback_to->obs.oi.extents;
-      } else {
-        ctx->delta_stats.num_bytes += rollback_to->obs.oi.size;
-        if (obs.oi.has_extents() && rollback_to->obs.oi.size) {
-          obs.oi.extents.insert(0, rollback_to->obs.oi.size);
-        }
-      }
+      ctx->delta_stats.num_bytes -= obs.oi.size;
+      ctx->delta_stats.num_bytes += rollback_to->obs.oi.size;
       obs.oi.size = rollback_to->obs.oi.size;
       if (rollback_to->obs.oi.is_data_digest())
 	obs.oi.set_data_digest(rollback_to->obs.oi.data_digest);
@@ -7428,7 +7633,7 @@ void PrimaryLogPG::_make_clone(
   object_info_t *poi)
 {
   bufferlist bv;
-  ::encode(*poi, bv, get_osdmap()->get_features(CEPH_ENTITY_TYPE_OSD, nullptr));
+  encode(*poi, bv, get_osdmap()->get_features(CEPH_ENTITY_TYPE_OSD, nullptr));
 
   t->clone(coid, head);
   setattr_maybe_cache(obc, t, OI_ATTR, bv);
@@ -7561,7 +7766,7 @@ void PrimaryLogPG::make_writeable(OpContext *ctx)
 			 ctx->obs->oi.version,
 			 ctx->obs->oi.user_version,
 			 osd_reqid_t(), ctx->new_obs.oi.mtime, 0));
-    ::encode(snaps, ctx->log.back().snaps);
+    encode(snaps, ctx->log.back().snaps);
 
     ctx->at_version.version++;
   }
@@ -7605,30 +7810,21 @@ void PrimaryLogPG::write_update_size_and_usage(object_stat_sum_t& delta_stats, o
   modified.union_of(ch);
   if (write_full || offset + length > oi.size) {
     uint64_t new_size = offset + length;
-    if (!oi.has_extents()) {
-      delta_stats.num_bytes -= oi.size;
-      delta_stats.num_bytes += new_size;
-    }
+    delta_stats.num_bytes -= oi.size;
+    delta_stats.num_bytes += new_size;
     oi.size = new_size;
   }
-  if (oi.has_extents()) {
-    delta_stats.num_bytes -= oi.extents.size();
-    if (write_full) {
-      // oi.size may shrink
-      oi.extents.clear();
-      assert(offset == 0);
-      if (length) {
-        oi.extents.insert(0, length);
-      }
-    } else {
-      if (length) {
-        oi.extents.union_of(ch); // deduplicated
+ 
+  if (oi.has_manifest() && oi.manifest.is_chunked()) {
+    for (auto &p : oi.manifest.chunk_map) {
+      if ((p.first <= offset && p.first + p.second.length > offset) ||
+	  (p.first > offset && p.first <= offset + length)) {
+	p.second.flags = chunk_info_t::FLAG_DIRTY;
       }
     }
-    delta_stats.num_bytes += oi.extents.size();
   }
   delta_stats.num_wr++;
-  delta_stats.num_wr_kb += SHIFT_ROUND_UP(length, 10);
+  delta_stats.num_wr_kb += shift_round_up(length, 10);
 }
 
 void PrimaryLogPG::truncate_update_size_and_usage(
@@ -7636,29 +7832,11 @@ void PrimaryLogPG::truncate_update_size_and_usage(
   object_info_t& oi,
   uint64_t truncate_size)
 {
-  if (oi.size == truncate_size) {
-    // no change
-    return;
-  }
-  if (oi.has_extents()) {
-    int64_t old_bytes = oi.extents.size();
-    if (truncate_size > oi.size) {
-      // trunc up
-      oi.extents.insert(oi.size, truncate_size - oi.size);
-    } else {
-      // trunc down
-      interval_set<uint64_t> new_extents;
-      new_extents.subset_of(oi.extents, 0, truncate_size);
-      oi.extents.swap(new_extents);
-    }
-    int64_t new_bytes = oi.extents.size();
-    delta_stats.num_bytes += new_bytes - old_bytes;
-  } else {
-    // fall back to old fashion
+  if (oi.size != truncate_size) {
     delta_stats.num_bytes -= oi.size;
     delta_stats.num_bytes += truncate_size;
+    oi.size = truncate_size;
   }
-  oi.size = truncate_size;
 }
 
 void PrimaryLogPG::complete_disconnect_watches(
@@ -7870,7 +8048,7 @@ void PrimaryLogPG::finish_ctx(OpContext *ctx, int log_op_type)
   // finish and log the op.
   if (ctx->user_modify) {
     // update the user_version for any modify ops, except for the watch op
-    ctx->user_at_version = MAX(info.last_user_version, ctx->new_obs.oi.user_version) + 1;
+    ctx->user_at_version = std::max(info.last_user_version, ctx->new_obs.oi.user_version) + 1;
     /* In order for new clients and old clients to interoperate properly
      * when exchanging versions, we need to lower bound the user_version
      * (which our new clients pay proper attention to)
@@ -7896,7 +8074,7 @@ void PrimaryLogPG::finish_ctx(OpContext *ctx, int log_op_type)
     // object_info_t
     map <string, bufferlist> attrs;
     bufferlist bv(sizeof(ctx->new_obs.oi));
-    ::encode(ctx->new_obs.oi, bv,
+    encode(ctx->new_obs.oi, bv,
 	     get_osdmap()->get_features(CEPH_ENTITY_TYPE_OSD, nullptr));
     attrs[OI_ATTR].claim(bv);
 
@@ -7905,7 +8083,7 @@ void PrimaryLogPG::finish_ctx(OpContext *ctx, int log_op_type)
       dout(10) << " final snapset " << ctx->new_snapset
 	       << " in " << soid << dendl;
       bufferlist bss;
-      ::encode(ctx->new_snapset, bss);
+      encode(ctx->new_snapset, bss);
       attrs[SS_ATTR].claim(bss);
     } else {
       dout(10) << " no snapset (this is a clone)" << dendl;
@@ -7928,7 +8106,7 @@ void PrimaryLogPG::finish_ctx(OpContext *ctx, int log_op_type)
     case pg_log_entry_t::CLEAN:
       dout(20) << __func__ << " encoding snaps from " << ctx->new_snapset
 	       << dendl;
-      ::encode(ctx->new_snapset.clone_snaps[soid.snap], ctx->log.back().snaps);
+      encode(ctx->new_snapset.clone_snaps[soid.snap], ctx->log.back().snaps);
       break;
     default:
       break;
@@ -8066,7 +8244,7 @@ struct C_CopyFrom_AsyncReadCb : public Context {
     bufferlist bl;
     bl.substr_of(reply_obj.data, 0, len);
     reply_obj.data.swap(bl);
-    ::encode(reply_obj, osd_op->outdata, features);
+    encode(reply_obj, osd_op->outdata, features);
   }
 };
 
@@ -8102,8 +8280,8 @@ int PrimaryLogPG::do_copy_get(OpContext *ctx, bufferlist::iterator& bp,
   object_copy_cursor_t cursor;
   uint64_t out_max;
   try {
-    ::decode(cursor, bp);
-    ::decode(out_max, bp);
+    decode(cursor, bp);
+    decode(out_max, bp);
   }
   catch (buffer::error& e) {
     result = -EINVAL;
@@ -8164,7 +8342,7 @@ int PrimaryLogPG::do_copy_get(OpContext *ctx, bufferlist::iterator& bp,
   bufferlist& bl = reply_obj.data;
   if (left > 0 && !cursor.data_complete) {
     if (cursor.data_offset < oi.size) {
-      uint64_t max_read = MIN(oi.size - cursor.data_offset, (uint64_t)left);
+      uint64_t max_read = std::min(oi.size - cursor.data_offset, (uint64_t)left);
       if (cb) {
 	async_read_started = true;
 	ctx->pending_async_reads.push_back(
@@ -8212,14 +8390,14 @@ int PrimaryLogPG::do_copy_get(OpContext *ctx, bufferlist::iterator& bp,
       iter->upper_bound(cursor.omap_offset);
       for (; iter->valid(); iter->next(false)) {
 	++omap_keys;
-	::encode(iter->key(), omap_data);
-	::encode(iter->value(), omap_data);
+	encode(iter->key(), omap_data);
+	encode(iter->value(), omap_data);
 	left -= iter->key().length() + 4 + iter->value().length() + 4;
 	if (left <= 0)
 	  break;
       }
       if (omap_keys) {
-	::encode(omap_keys, reply_obj.omap_data);
+	encode(omap_keys, reply_obj.omap_data);
 	reply_obj.omap_data.claim_append(omap_data);
       }
       if (iter->valid()) {
@@ -8236,12 +8414,6 @@ int PrimaryLogPG::do_copy_get(OpContext *ctx, bufferlist::iterator& bp,
     // but it works...
     pg_log.get_log().get_object_reqids(ctx->obc->obs.oi.soid, 10, &reply_obj.reqids);
     dout(20) << " got reqids" << dendl;
-    if (oi.has_extents()) {
-      // note that we might call this multiple times
-      // include extents only in the final step to make extents.insert happy
-      reply_obj.flags |= object_copy_data_t::FLAG_EXTENTS;
-      reply_obj.extents = oi.extents;
-    }
   }
 
   dout(20) << " cursor.is_complete=" << cursor.is_complete()
@@ -8254,7 +8426,7 @@ int PrimaryLogPG::do_copy_get(OpContext *ctx, bufferlist::iterator& bp,
 	   << dendl;
   reply_obj.cursor = cursor;
   if (!async_read_started) {
-    ::encode(reply_obj, osd_op.outdata, features);
+    encode(reply_obj, osd_op.outdata, features);
   }
   if (cb && !async_read_started) {
     delete cb;
@@ -8278,7 +8450,7 @@ void PrimaryLogPG::fill_in_copy_get_noent(OpRequestRef& op, hobject_t oid,
 
   pg_log.get_log().get_object_reqids(oid, 10, &reply_obj.reqids);
   dout(20) << __func__ << " got reqids " << reply_obj.reqids << dendl;
-  ::encode(reply_obj, osd_op.outdata, features);
+  encode(reply_obj, osd_op.outdata, features);
   osd_op.rval = -ENOENT;
   MOSDOpReply *reply = new MOSDOpReply(m, 0, get_osdmap()->get_epoch(), 0, false,
                                        op->qos_resp);
@@ -8373,7 +8545,6 @@ void PrimaryLogPG::_copy_some(ObjectContextRef obc, CopyOpRef cop)
 	      &cop->results.reqids,
 	      &cop->results.truncate_seq,
 	      &cop->results.truncate_size,
-	      &cop->results.extents,
 	      &cop->rval);
   op.set_last_op_flags(cop->src_obj_fadvise_flags);
 
@@ -8388,7 +8559,9 @@ void PrimaryLogPG::_copy_some(ObjectContextRef obc, CopyOpRef cop)
 				  flags,
 				  gather.new_sub(),
 				  // discover the object version if we don't know it yet
-				  cop->results.user_version ? NULL : &cop->results.user_version);
+				  cop->results.user_version ? NULL : &cop->results.user_version,
+				  NULL, 0,
+				  &cop->results.temperature);
   fin->tid = tid;
   cop->objecter_tid = tid;
   gather.activate();
@@ -8736,25 +8909,27 @@ void PrimaryLogPG::process_copy_chunk_manifest(hobject_t oid, ceph_tid_t tid, in
 	      sub_chunk.outdata.length(),
 	      sub_chunk.outdata,
 	      p.second->dest_obj_fadvise_flags);
-      obs.oi.manifest.chunk_map[p.second->cursor.data_offset].flags = 0; // clean
       dout(20) << __func__ << " offset: " << p.second->cursor.data_offset 
 	      << " length: " << sub_chunk.outdata.length() << dendl;
       sub_chunk.outdata.clear();
       write_update_size_and_usage(ctx->delta_stats, obs.oi, ctx->modified_ranges,
 				  p.second->cursor.data_offset, sub_chunk.outdata.length());
+      obs.oi.manifest.chunk_map[p.second->cursor.data_offset].flags = 0; // clean
     }
     obs.oi.clear_data_digest();
     ctx->at_version = get_next_version(); 
     finish_ctx(ctx.get(), pg_log_entry_t::PROMOTE);
     simple_opc_submit(std::move(ctx));
 
-    auto p = cobc->obs.oi.manifest.chunk_map.end();
+    auto p = cobc->obs.oi.manifest.chunk_map.rbegin();
     /* check remaining work */
-    if (obj_cop->last_offset >= p->first + p->second.length) {
-      for (auto &en : cobc->obs.oi.manifest.chunk_map) {
-	if (obj_cop->last_offset < en.first) {
-	  _copy_some_manifest(cobc, obj_cop, en.first);
-	  return;
+    if (p != cobc->obs.oi.manifest.chunk_map.rend()) {
+      if (obj_cop->last_offset >= p->first + p->second.length) {
+	for (auto &en : cobc->obs.oi.manifest.chunk_map) {
+	  if (obj_cop->last_offset < en.first) {
+	    _copy_some_manifest(cobc, obj_cop, en.first);
+	    return;
+	  }
 	}
       }
     }
@@ -8850,7 +9025,7 @@ void PrimaryLogPG::_write_copy_chunk(CopyOpRef cop, PGTransaction *t)
       if (cop->omap_data.length()) {
 	map<string,bufferlist> omap;
 	bufferlist::iterator p = cop->omap_data.begin();
-	::decode(omap, p);
+	decode(omap, p);
 	t->omap_setkeys(cop->results.temp_oid, omap);
 	cop->omap_data.clear();
       }
@@ -8919,14 +9094,13 @@ void PrimaryLogPG::finish_copyfrom(CopyFromCallback *cb)
     ch.insert(0, obs.oi.size);
   ctx->modified_ranges.union_of(ch);
 
-  ctx->delta_stats.num_bytes -= obs.oi.has_extents() ?
-                                obs.oi.extents.size() : obs.oi.size;
-  obs.oi.clear_flag(object_info_t::FLAG_EXTENTS);
-  obs.oi.extents.clear();
-  obs.oi.size = cb->get_data_size();
-  ctx->delta_stats.num_bytes += obs.oi.size;
+  if (cb->get_data_size() != obs.oi.size) {
+    ctx->delta_stats.num_bytes -= obs.oi.size;
+    obs.oi.size = cb->get_data_size();
+    ctx->delta_stats.num_bytes += obs.oi.size;
+  }
   ctx->delta_stats.num_wr++;
-  ctx->delta_stats.num_wr_kb += SHIFT_ROUND_UP(obs.oi.size, 10);
+  ctx->delta_stats.num_wr_kb += shift_round_up(obs.oi.size, 10);
 
   osd->logger->inc(l_osd_copyfrom);
 }
@@ -9093,10 +9267,6 @@ void PrimaryLogPG::finish_promote(int r, CopyResults *results,
     }
     tctx->new_obs.oi.truncate_seq = results->truncate_seq;
     tctx->new_obs.oi.truncate_size = results->truncate_size;
-    if (results->has_extents()) {
-      tctx->new_obs.oi.set_flag(object_info_t::FLAG_EXTENTS);
-      tctx->new_obs.oi.extents = results->extents;
-    }
 
     if (soid.snap != CEPH_NOSNAP) {
       assert(obc->ssc->snapset.clone_snaps.count(soid.snap));
@@ -9107,8 +9277,7 @@ void PrimaryLogPG::finish_promote(int r, CopyResults *results,
 
       tctx->delta_stats.num_bytes += obc->ssc->snapset.get_clone_bytes(soid.snap);
     } else {
-      tctx->delta_stats.num_bytes += results->has_extents() ?
-                                     results->extents.size() : results->object_size;
+      tctx->delta_stats.num_bytes += results->object_size;
     }
   }
 
@@ -9119,6 +9288,30 @@ void PrimaryLogPG::finish_promote(int r, CopyResults *results,
       get_osdmap()->require_osd_release < CEPH_RELEASE_LUMINOUS);
   }
   dout(20) << __func__ << " new_snapset " << tctx->new_snapset << dendl;
+
+  if (hit_set && hit_set->impl->get_type() == HitSet::TYPE_TEMP) {
+    TempHitSet* th = static_cast<TempHitSet*>(hit_set->impl.get());
+    th->set_temp(soid, results->temperature ? results->temperature : agent_state->promote_temp);
+  }
+
+  if (obc->obs.oi.soid.snap == CEPH_NOSNAP &&
+      pool.info.cache_mode == pg_pool_t::CACHEMODE_SWAP) {
+    // delete head object in tier_of and mark it dirty in cache tier to save space
+    tctx->new_obs.oi.set_flag(object_info_t::FLAG_DIRTY);
+    object_locator_t base_oloc(soid);
+    base_oloc.pool = pool.info.tier_of;
+    ObjectOperation o;
+    o.remove();
+    osd->objecter->mutate(
+      tctx->new_obs.oi.soid.oid,
+      base_oloc,
+      o,
+      obc->ssc->snapset.get_ssc_as_of(obc->ssc->snapset.seq),
+      ceph::real_clock::from_ceph_timespec(tctx->new_obs.oi.mtime),
+      (CEPH_OSD_FLAG_IGNORE_OVERLAY |
+       CEPH_OSD_FLAG_ENFORCE_SNAPC),
+      NULL /* no callback, we'll rely on the ordering w.r.t the next op */);
+  }
 
   // take RWWRITE lock for duration of our local write.  ignore starvation.
   if (!tctx->lock_manager.take_write_lock(
@@ -9350,6 +9543,15 @@ int PrimaryLogPG::start_flush(
     cancel_flush(fop, false);
   }
 
+  if (obc->obs.oi.has_manifest() && obc->obs.oi.manifest.is_chunked()) {
+    int r = start_manifest_flush(op, obc, blocking, std::move(on_flush));
+    if (r != -EINPROGRESS) {
+      if (blocking)
+	obc->stop_block();
+    }
+    return r;
+  }
+
   /**
    * In general, we need to send a delete and a copyfrom.
    * Consider snapc 10:[10, 9, 8, 4, 3, 2]:[10(10, 9), 4(4,3,2)]
@@ -9452,7 +9654,7 @@ int PrimaryLogPG::start_flush(
 
   flush_ops[soid] = fop;
   info.stats.stats.sum.num_flush++;
-  info.stats.stats.sum.num_flush_kb += SHIFT_ROUND_UP(oi.size, 10);
+  info.stats.stats.sum.num_flush_kb += shift_round_up(oi.size, 10);
   return -EINPROGRESS;
 }
 
@@ -9466,7 +9668,7 @@ void PrimaryLogPG::finish_flush(hobject_t oid, ceph_tid_t tid, int r)
     return;
   }
   FlushOpRef fop = p->second;
-  if (tid != fop->objecter_tid) {
+  if (tid != fop->objecter_tid && !fop->obc->obs.oi.has_manifest()) {
     dout(10) << __func__ << " tid " << tid << " != fop " << fop
 	     << " tid " << fop->objecter_tid << dendl;
     return;
@@ -9550,7 +9752,7 @@ int PrimaryLogPG::try_flush_mark_clean(FlushOpRef fop)
   }
 
   // successfully flushed, can we evict this object?
-  if (!fop->op && agent_state->evict_mode != TierAgentState::EVICT_MODE_IDLE &&
+  if (!obc->obs.oi.has_manifest() && !fop->op && agent_state->evict_mode != TierAgentState::EVICT_MODE_IDLE &&
       agent_maybe_evict(obc, true)) {
     osd->logger->inc(l_osd_tier_clean);
     if (fop->on_flush) {
@@ -9597,6 +9799,40 @@ int PrimaryLogPG::try_flush_mark_clean(FlushOpRef fop)
   ctx->new_obs = obc->obs;
   ctx->new_obs.oi.clear_flag(object_info_t::FLAG_DIRTY);
   --ctx->delta_stats.num_objects_dirty;
+  if (fop->obc->obs.oi.has_manifest()) {
+    assert(obc->obs.oi.manifest.is_chunked());
+    PGTransaction* t = ctx->op_t.get();
+    uint64_t chunks_size = 0;
+    for (auto &p : ctx->new_obs.oi.manifest.chunk_map) {
+      chunks_size += p.second.length;
+    }
+    if (ctx->new_obs.oi.is_omap() && pool.info.supports_omap()) {
+      t->omap_clear(oid);
+      ctx->new_obs.oi.clear_omap_digest();
+      ctx->new_obs.oi.clear_flag(object_info_t::FLAG_OMAP);
+    }
+    if (obc->obs.oi.size == chunks_size) { 
+      t->truncate(oid, 0);
+      interval_set<uint64_t> trim;
+      trim.insert(0, ctx->new_obs.oi.size);
+      ctx->modified_ranges.union_of(trim);
+      truncate_update_size_and_usage(ctx->delta_stats,
+				     ctx->new_obs.oi,
+				     0);
+      ctx->new_obs.oi.new_object();
+      for (auto &p : ctx->new_obs.oi.manifest.chunk_map) {
+	p.second.flags = chunk_info_t::FLAG_MISSING;
+      }
+    } else {
+      for (auto &p : ctx->new_obs.oi.manifest.chunk_map) {
+	if (p.second.flags == chunk_info_t::FLAG_DIRTY) {
+	  dout(20) << __func__ << " offset: " << p.second.offset 
+		  << " length: " << p.second.length << dendl;
+	  p.second.flags = 0; // CLEAN
+	}
+      }
+    }
+  }
 
   finish_ctx(ctx.get(), pg_log_entry_t::CLEAN);
 
@@ -9631,7 +9867,13 @@ void PrimaryLogPG::cancel_flush(FlushOpRef fop, bool requeue)
     osd->objecter->op_cancel(fop->objecter_tid, -ECANCELED);
     fop->objecter_tid = 0;
   }
-  if (fop->blocking) {
+  if (fop->io_tids.size()) {
+    for (auto &p : fop->io_tids) {
+      osd->objecter->op_cancel(p.second, -ECANCELED);
+      p.second = 0;
+    } 
+  }
+  if (fop->blocking && fop->obc->is_blocked()) {
     fop->obc->stop_block();
     kick_object_context_blocked(fop->obc);
   }
@@ -9789,16 +10031,17 @@ void PrimaryLogPG::eval_repop(RepGather *repop)
       (*p)();
     }
     // send dup commits, in order
-    if (waiting_for_ondisk.count(repop->v)) {
+    auto it = waiting_for_ondisk.find(repop->v);
+    if (it != waiting_for_ondisk.end()) {
       assert(waiting_for_ondisk.begin()->first == repop->v);
       for (list<pair<OpRequestRef, version_t> >::iterator i =
-	     waiting_for_ondisk[repop->v].begin();
-	   i != waiting_for_ondisk[repop->v].end();
+	     it->second.begin();
+	   i != it->second.end();
 	   ++i) {
 	osd->reply_op_error(i->first, repop->r, repop->v,
 			    i->second);
       }
-      waiting_for_ondisk.erase(repop->v);
+      waiting_for_ondisk.erase(it);
     }
   }
 
@@ -10182,12 +10425,13 @@ void PrimaryLogPG::check_blacklisted_obc_watchers(ObjectContextRef obc)
 void PrimaryLogPG::populate_obc_watchers(ObjectContextRef obc)
 {
   assert(is_active());
+  auto it_objects = pg_log.get_log().objects.find(obc->obs.oi.soid);
   assert((recovering.count(obc->obs.oi.soid) ||
 	  !is_missing_object(obc->obs.oi.soid)) ||
-	 (pg_log.get_log().objects.count(obc->obs.oi.soid) && // or this is a revert... see recover_primary()
-	  pg_log.get_log().objects.find(obc->obs.oi.soid)->second->op ==
+	 (it_objects != pg_log.get_log().objects.end() && // or this is a revert... see recover_primary()
+	  it_objects->second->op ==
 	    pg_log_entry_t::LOST_REVERT &&
-	  pg_log.get_log().objects.find(obc->obs.oi.soid)->second->reverting_to ==
+	  it_objects->second->reverting_to ==
 	    obc->obs.oi.version));
 
   dout(10) << "populate_obc_watchers " << obc->obs.oi.soid << dendl;
@@ -10269,7 +10513,7 @@ void PrimaryLogPG::handle_watch_timeout(WatchRef watch)
   oi.prior_version = obc->obs.oi.version;
   oi.version = ctx->at_version;
   bufferlist bl;
-  ::encode(oi, bl, get_osdmap()->get_features(CEPH_ENTITY_TYPE_OSD, nullptr));
+  encode(oi, bl, get_osdmap()->get_features(CEPH_ENTITY_TYPE_OSD, nullptr));
   t->setattr(obc->obs.oi.soid, OI_ATTR, bl);
 
   // apply new object state.
@@ -10301,11 +10545,12 @@ ObjectContextRef PrimaryLogPG::get_object_context(
   bool can_create,
   const map<string, bufferlist> *attrs)
 {
+  auto it_objects = pg_log.get_log().objects.find(soid);
   assert(
     attrs || !pg_log.get_missing().is_missing(soid) ||
     // or this is a revert... see recover_primary()
-    (pg_log.get_log().objects.count(soid) &&
-      pg_log.get_log().objects.find(soid)->second->op ==
+    (it_objects != pg_log.get_log().objects.end() &&
+      it_objects->second->op ==
       pg_log_entry_t::LOST_REVERT));
   ObjectContextRef obc = object_contexts.lookup(soid);
   osd->logger->inc(l_osd_object_ctx_cache_total);
@@ -10318,8 +10563,9 @@ ObjectContextRef PrimaryLogPG::get_object_context(
     // check disk
     bufferlist bv;
     if (attrs) {
-      assert(attrs->count(OI_ATTR));
-      bv = attrs->find(OI_ATTR)->second;
+      auto it_oi = attrs->find(OI_ATTR);
+      assert(it_oi != attrs->end());
+      bv = it_oi->second;
     } else {
       int r = pgbackend->objects_get_attr(soid, OI_ATTR, &bv);
       if (r < 0) {
@@ -10351,7 +10597,7 @@ ObjectContextRef PrimaryLogPG::get_object_context(
     object_info_t oi;
     try {
       bufferlist::iterator bliter = bv.begin();
-      ::decode(oi, bliter);
+      decode(oi, bliter);
     } catch (...) {
       dout(0) << __func__ << ": obc corrupt: " << soid << dendl;
       return ObjectContextRef();   // -ENOENT!
@@ -10649,8 +10895,7 @@ void PrimaryLogPG::add_object_context_to_pg_stat(ObjectContextRef obc, pg_stat_t
     assert(obc->ssc);
     stat.num_bytes += obc->ssc->snapset.get_clone_bytes(oi.soid.snap);
   } else {
-    stat.num_bytes += oi.has_extents() ?
-                      oi.extents.size() : oi.size;
+    stat.num_bytes += oi.size;
   }
 
   // add it in
@@ -10712,8 +10957,9 @@ SnapSetContext *PrimaryLogPG::get_snapset_context(
       if (r < 0 && !can_create)
 	return NULL;
     } else {
-      assert(attrs->count(SS_ATTR));
-      bv = attrs->find(SS_ATTR)->second;
+      auto it_ss = attrs->find(SS_ATTR);
+      assert(it_ss != attrs->end());
+      bv = it_ss->second;
     }
     ssc = new SnapSetContext(oid.get_snapdir());
     _register_snapset_context(ssc);
@@ -11354,15 +11600,11 @@ void PrimaryLogPG::on_removal(ObjectStore::Transaction *t)
   pg_log.reset_backfill();
   dirty_info = true;
 
-
   // clear log
   PGLogEntryHandler rollbacker{this, t};
   pg_log.roll_forward(&rollbacker);
 
-  write_if_dirty(*t);
-
-  if (!deleting)
-    on_shutdown();
+  on_shutdown();
 }
 
 void PrimaryLogPG::clear_async_reads()
@@ -11478,7 +11720,7 @@ void PrimaryLogPG::on_activate()
 
 void PrimaryLogPG::_on_new_interval()
 {
-  dout(20) << __func__ << "checking missing set deletes flag. missing = " << pg_log.get_missing() << dendl;
+  dout(20) << __func__ << " checking missing set deletes flag. missing = " << pg_log.get_missing() << dendl;
   if (!pg_log.get_missing().may_include_deletes &&
       get_osdmap()->test_flag(CEPH_OSDMAP_RECOVERY_DELETES)) {
     pg_log.rebuild_missing_set_with_deletes(osd->store, coll, info);
@@ -11871,9 +12113,6 @@ bool PrimaryLogPG::start_recovery_ops(
   if (state_test(PG_STATE_RECOVERING)) {
     state_clear(PG_STATE_RECOVERING);
     state_clear(PG_STATE_FORCED_RECOVERY);
-    if (get_osdmap()->get_pg_size(info.pgid.pgid) <= acting.size()) {
-      state_clear(PG_STATE_DEGRADED);
-    }
     if (needs_backfill()) {
       dout(10) << "recovery done, queuing backfill" << dendl;
       queue_peering_event(
@@ -11939,8 +12178,9 @@ uint64_t PrimaryLogPG::recover_primary(uint64_t max, ThreadPool::TPHandle &handl
     hobject_t soid;
     version_t v = p->first;
 
-    if (pg_log.get_log().objects.count(p->second)) {
-      latest = pg_log.get_log().objects.find(p->second)->second;
+    auto it_objects = pg_log.get_log().objects.find(p->second);
+    if (it_objects != pg_log.get_log().objects.end()) {
+      latest = it_objects->second;
       assert(latest->is_update() || latest->is_delete());
       soid = latest->soid;
     } else {
@@ -12313,7 +12553,7 @@ bool PrimaryLogPG::all_peer_done() const
  * All objects in PG in [MIN,backfill_info.begin) have been backfilled to all
  * backfill_targets.  There may be objects on backfill_target(s) yet to be deleted.
  *
- * For a backfill target, all objects < MIN(peer_backfill_info[target].begin,
+ * For a backfill target, all objects < std::min(peer_backfill_info[target].begin,
  *     backfill_info.begin) in PG are backfilled.  No deleted objects in this
  * interval remain on the backfill target.
  *
@@ -12321,7 +12561,7 @@ bool PrimaryLogPG::all_peer_done() const
  * have been backfilled to target
  *
  * There *MAY* be missing/outdated objects between last_backfill_started and
- * MIN(peer_backfill_info[*].begin, backfill_info.begin) in the event that client
+ * std::min(peer_backfill_info[*].begin, backfill_info.begin) in the event that client
  * io created objects since the last scan.  For this reason, we call
  * update_range() again before continuing backfill.
  */
@@ -13019,6 +13259,22 @@ void PrimaryLogPG::hit_set_create()
 
     dout(10) << __func__ << " target_size " << p->target_size
 	     << " fpp " << p->get_fpp() << dendl;
+  } else if (pool.info.hit_set_params.get_type() == HitSet::TYPE_TEMP) {
+    if (!hit_set) {
+      // try loading the temp hit set in local storage
+      pg_hit_set_info_t& p = info.hit_set.history.back();
+      hobject_t oid = get_hit_set_archive_object(p.begin, p.end, p.using_gmt);
+      hit_set = hit_set_load(oid);
+    }
+    if (!hit_set || hit_set->impl->get_type() != HitSet::TYPE_TEMP)
+      hit_set.reset(new HitSet(params));
+    TempHitSet* th = static_cast<TempHitSet*>(hit_set->impl.get());
+    th->set_dp(pool.info.hit_set_period);
+    hit_set->sealed = false;
+    if (pool.info.is_tier())
+      th->sync(true);
+    hit_set_start_stamp = now;
+    return;
   }
   hit_set.reset(new HitSet(params));
   hit_set_start_stamp = now;
@@ -13111,7 +13367,7 @@ void PrimaryLogPG::hit_set_persist()
     return;
 
   hit_set->seal();
-  ::encode(*hit_set, bl);
+  encode(*hit_set, bl);
   dout(20) << __func__ << " archive " << oid << dendl;
 
   if (agent_state) {
@@ -13149,16 +13405,14 @@ void PrimaryLogPG::hit_set_persist()
 
   ctx->delta_stats.num_objects++;
   ctx->delta_stats.num_objects_hit_set_archive++;
-  // we do not use extents for usage tracking
-  // of hit_set_archive objects, for now!
-  assert(!obc->obs.oi.has_extents());
+
   ctx->delta_stats.num_bytes += bl.length();
   ctx->delta_stats.num_bytes_hit_set_archive += bl.length();
 
   bufferlist bss;
-  ::encode(ctx->new_snapset, bss);
+  encode(ctx->new_snapset, bss);
   bufferlist boi(sizeof(ctx->new_obs.oi));
-  ::encode(ctx->new_obs.oi, boi,
+  encode(ctx->new_obs.oi, boi,
 	   get_osdmap()->get_features(CEPH_ENTITY_TYPE_OSD, nullptr));
 
   ctx->op_t->create(oid);
@@ -13184,6 +13438,44 @@ void PrimaryLogPG::hit_set_persist()
   hit_set_trim(ctx, max);
 
   simple_opc_submit(std::move(ctx));
+}
+
+HitSetRef PrimaryLogPG::hit_set_load(hobject_t& oid) {
+  if (!pool.info.is_replicated()) {
+    // FIXME: EC not supported here yet
+    derr << __func__ << " on non-replicated pool" << dendl;
+    return HitSetRef();
+  }
+
+  if (is_unreadable_object(oid)) {
+    dout(10) << __func__ << " unreadable " << oid << ", waiting" << dendl;
+    return HitSetRef();
+  }
+
+  ObjectContextRef obc = get_object_context(oid, false);
+  if (!obc) {
+    derr << __func__ << ": could not load hitset " << oid << dendl;
+    return HitSetRef();
+  }
+
+  int r;
+  bufferlist bl;
+  {
+    obc->ondisk_read_lock();
+    r = osd->store->read(ch, ghobject_t(oid), 0, 0, bl);
+    obc->ondisk_read_unlock();
+  }
+  if (r < 0)
+    return HitSetRef();
+  HitSetRef hs(new HitSet);
+  bufferlist::iterator pbl = bl.begin();
+  try {
+    ::decode(*hs, pbl);
+    return hs;
+  } catch (...) {
+    dout(0) << __func__ << ": error on loading hitset." << dendl;
+  }
+  return HitSetRef();
 }
 
 void PrimaryLogPG::hit_set_trim(OpContextUPtr &ctx, unsigned max)
@@ -13217,7 +13509,6 @@ void PrimaryLogPG::hit_set_trim(OpContextUPtr &ctx, unsigned max)
     assert(obc);
     --ctx->delta_stats.num_objects;
     --ctx->delta_stats.num_objects_hit_set_archive;
-    assert(!obc->obs.oi.has_extents());
     ctx->delta_stats.num_bytes -= obc->obs.oi.size;
     ctx->delta_stats.num_bytes_hit_set_archive -= obc->obs.oi.size;
   }
@@ -13286,13 +13577,6 @@ bool PrimaryLogPG::agent_work(int start_max, int agent_flush_quota)
   }
 
   assert(!deleting);
-
-  if (agent_state->is_idle()) {
-    dout(10) << __func__ << " idle, stopping" << dendl;
-    unlock();
-    return true;
-  }
-
   osd->logger->inc(l_osd_agent_wake);
 
   dout(10) << __func__
@@ -13379,6 +13663,7 @@ bool PrimaryLogPG::agent_work(int start_max, int agent_flush_quota)
     }
 
     if (agent_state->evict_mode != TierAgentState::EVICT_MODE_IDLE &&
+        pool.info.cache_mode != pg_pool_t::CACHEMODE_SWAP &&
 	agent_maybe_evict(obc, false))
       ++started;
     else if (agent_state->flush_mode != TierAgentState::FLUSH_MODE_IDLE &&
@@ -13419,6 +13704,10 @@ bool PrimaryLogPG::agent_work(int start_max, int agent_flush_quota)
     else
       total_started = 0;
     agent_state->start = next;
+    if (hit_set && hit_set->impl->get_type() == HitSet::TYPE_TEMP) {
+      TempHitSet* th = static_cast<TempHitSet*>(hit_set->impl.get());
+      th->sync(true);
+    }
   }
   agent_state->started = total_started;
 
@@ -13482,7 +13771,7 @@ void PrimaryLogPG::agent_load_hit_sets()
 	}
 	HitSetRef hs(new HitSet);
 	bufferlist::iterator pbl = bl.begin();
-	::decode(*hs, pbl);
+	decode(*hs, pbl);
 	agent_state->add_hit_set(p->begin.sec(), hs);
       }
     }
@@ -13523,6 +13812,16 @@ bool PrimaryLogPG::agent_maybe_flush(ObjectContextRef& obc)
     dout(20) << __func__ << " skip (flushing) " << obc->obs.oi << dendl;
     osd->logger->inc(l_osd_agent_skip);
     return false;
+  }
+
+  if (agent_state->flush_mode == TierAgentState::FLUSH_MODE_LOW &&
+      hit_set && hit_set->impl->get_type() == HitSet::TYPE_TEMP) {
+    TempHitSet* th = static_cast<TempHitSet*>(hit_set->impl.get());
+    if (th->get_temp(obc->obs.oi.soid) > agent_state->flush_temp) {
+      dout(20) << __func__ << " skip (hot) " << obc->obs.oi << dendl;
+      osd->logger->inc(l_osd_agent_skip);
+      return false;
+    }
   }
 
   dout(10) << __func__ << " flushing " << obc->obs.oi << dendl;
@@ -13595,6 +13894,12 @@ bool PrimaryLogPG::agent_maybe_evict(ObjectContextRef& obc, bool after_flush)
       return false;
     }
     // is this object old and/or cold enough?
+    if (hit_set && hit_set->impl->get_type() == HitSet::TYPE_TEMP) {
+      TempHitSet* th = static_cast<TempHitSet*>(hit_set->impl.get());
+      if (th->get_temp(soid) > agent_state->evict_temp)
+	return false;
+      goto skip_calc;
+    }
     int temp = 0;
     uint64_t temp_upper = 0, temp_lower = 0;
     if (hit_set)
@@ -13620,6 +13925,7 @@ bool PrimaryLogPG::agent_maybe_evict(ObjectContextRef& obc, bool after_flush)
       return false;
   }
 
+ skip_calc:
   dout(10) << __func__ << " evicting " << obc->obs.oi << dendl;
   OpContextUPtr ctx = simple_opc_create(obc);
 
@@ -13645,7 +13951,7 @@ bool PrimaryLogPG::agent_maybe_evict(ObjectContextRef& obc, bool after_flush)
   if (obc->obs.oi.is_omap())
     ctx->delta_stats.num_objects_omap--;
   ctx->delta_stats.num_evict++;
-  ctx->delta_stats.num_evict_kb += SHIFT_ROUND_UP(obc->obs.oi.size, 10);
+  ctx->delta_stats.num_evict_kb += shift_round_up(obc->obs.oi.size, 10);
   if (obc->obs.oi.is_dirty())
     --ctx->delta_stats.num_objects_dirty;
   assert(r == 0);
@@ -13698,7 +14004,9 @@ bool PrimaryLogPG::agent_choose_mode(bool restart, OpRequestRef op)
 
   TierAgentState::flush_mode_t flush_mode = TierAgentState::FLUSH_MODE_IDLE;
   TierAgentState::evict_mode_t evict_mode = TierAgentState::EVICT_MODE_IDLE;
+  TierAgentState::promote_mode_t promote_mode = TierAgentState::PROMOTE_MODE_FULL;
   unsigned evict_effort = 0;
+  uint32_t evict_temp = 0, flush_temp = 0, promote_temp = 0;
 
   if (info.stats.stats_invalid) {
     // idle; stats can't be trusted until we scrub.
@@ -13766,20 +14074,20 @@ bool PrimaryLogPG::agent_choose_mode(bool restart, OpRequestRef op)
     uint64_t avg_size = num_user_bytes / num_user_objects;
     dirty_micro =
       num_dirty * avg_size * 1000000 /
-      MAX(pool.info.target_max_bytes / divisor, 1);
+      std::max<uint64_t>(pool.info.target_max_bytes / divisor, 1);
     full_micro =
       num_user_objects * avg_size * 1000000 /
-      MAX(pool.info.target_max_bytes / divisor, 1);
+      std::max<uint64_t>(pool.info.target_max_bytes / divisor, 1);
   }
   if (pool.info.target_max_objects > 0) {
     uint64_t dirty_objects_micro =
       num_dirty * 1000000 /
-      MAX(pool.info.target_max_objects / divisor, 1);
+      std::max<uint64_t>(pool.info.target_max_objects / divisor, 1);
     if (dirty_objects_micro > dirty_micro)
       dirty_micro = dirty_objects_micro;
     uint64_t full_objects_micro =
       num_user_objects * 1000000 /
-      MAX(pool.info.target_max_objects / divisor, 1);
+      std::max<uint64_t>(pool.info.target_max_objects / divisor, 1);
     if (full_objects_micro > full_micro)
       full_micro = full_objects_micro;
   }
@@ -13795,8 +14103,8 @@ bool PrimaryLogPG::agent_choose_mode(bool restart, OpRequestRef op)
     flush_target += flush_slop;
     flush_high_target += flush_slop;
   } else {
-    flush_target -= MIN(flush_target, flush_slop);
-    flush_high_target -= MIN(flush_high_target, flush_slop);
+    flush_target -= std::min(flush_target, flush_slop);
+    flush_high_target -= std::min(flush_high_target, flush_slop);
   }
 
   if (dirty_micro > flush_high_target) {
@@ -13811,7 +14119,7 @@ bool PrimaryLogPG::agent_choose_mode(bool restart, OpRequestRef op)
   if (restart || agent_state->evict_mode == TierAgentState::EVICT_MODE_IDLE)
     evict_target += evict_slop;
   else
-    evict_target -= MIN(evict_target, evict_slop);
+    evict_target -= std::min(evict_target, evict_slop);
 
   if (full_micro > 1000000) {
     // evict anything clean
@@ -13822,8 +14130,9 @@ bool PrimaryLogPG::agent_choose_mode(bool restart, OpRequestRef op)
     evict_mode = TierAgentState::EVICT_MODE_SOME;
     uint64_t over = full_micro - evict_target;
     uint64_t span  = 1000000 - evict_target;
-    evict_effort = MAX(over * 1000000 / span,
-		       (unsigned)(1000000.0 * cct->_conf->osd_agent_min_evict_effort));
+    evict_effort = std::max(over * 1000000 / span,
+			    uint64_t(1000000.0 *
+				     cct->_conf->osd_agent_min_evict_effort));
 
     // quantize effort to avoid too much reordering in the agent_queue.
     uint64_t inc = cct->_conf->osd_agent_quantize_effort * 1000000;
@@ -13835,6 +14144,47 @@ bool PrimaryLogPG::agent_choose_mode(bool restart, OpRequestRef op)
     assert(evict_effort >= inc && evict_effort <= 1000000);
     dout(30) << __func__ << " evict_effort " << was << " quantized by " << inc << " to " << evict_effort << dendl;
   }
+
+  // promote mode
+  // TODO: add an pool config to control the promote slope
+  float slope = 0.9;
+  if (full_micro > 1000000)
+    promote_mode = TierAgentState::PROMOTE_MODE_FULL;
+  else if (agent_state->promote_mode != TierAgentState::PROMOTE_MODE_WARMING ||
+           full_micro >= slope * evict_target)
+    promote_mode = TierAgentState::PROMOTE_MODE_SOME;
+  else
+    promote_mode = TierAgentState::PROMOTE_MODE_WARMING;
+
+  // flush the object only if it need to be evicted
+  if (pool.info.cache_mode == pg_pool_t::CACHEMODE_SWAP) {
+    if (evict_mode == TierAgentState::EVICT_MODE_FULL)
+      flush_mode = TierAgentState::FLUSH_MODE_HIGH;
+    else if (evict_mode == TierAgentState::EVICT_MODE_SOME)
+      flush_mode = TierAgentState::FLUSH_MODE_LOW;
+    else
+      flush_mode = TierAgentState::FLUSH_MODE_IDLE;
+  }
+
+  if (hit_set && hit_set->impl->get_type() == HitSet::TYPE_TEMP) {
+    uint64_t target_objects = UINT64_MAX;
+    uint32_t min_recency_for_promote = MAX(pool.info.min_read_recency_for_promote,
+      pool.info.min_write_recency_for_promote);
+    if (pool.info.target_max_objects)
+      target_objects = pool.info.target_max_objects / divisor;
+    if (pool.info.target_max_bytes &&
+        num_user_objects > 0 &&
+        num_user_bytes > 0) {
+      uint64_t target_objects_size = pool.info.target_max_bytes / divisor / \
+        MAX(1, num_user_bytes / num_user_objects);
+      target_objects = MIN(target_objects, target_objects_size);
+    }
+    TempHitSet* th = static_cast<TempHitSet*>(hit_set->impl.get());
+    evict_temp = th->get_rank_temp(slope * evict_target * target_objects / 1000000);
+    flush_temp = evict_temp;
+    promote_temp = MAX(min_recency_for_promote, evict_temp * 2);
+  }
+
   }
 
   skip_calc:
@@ -13888,6 +14238,14 @@ bool PrimaryLogPG::agent_choose_mode(bool restart, OpRequestRef op)
     }
     agent_state->evict_mode = evict_mode;
   }
+  if (promote_mode != agent_state->promote_mode) {
+    dout(5) << __func__ << " promote mode "
+      << TierAgentState::get_promote_mode_name(agent_state->promote_mode)
+      << " -> "
+      << TierAgentState::get_promote_mode_name(promote_mode)
+      << dendl;
+    agent_state->promote_mode = promote_mode;
+  }
   uint64_t old_effort = agent_state->evict_effort;
   if (evict_effort != agent_state->evict_effort) {
     dout(5) << __func__ << " evict_effort "
@@ -13897,6 +14255,9 @@ bool PrimaryLogPG::agent_choose_mode(bool restart, OpRequestRef op)
 	    << dendl;
     agent_state->evict_effort = evict_effort;
   }
+  agent_state->promote_temp = promote_temp;
+  agent_state->evict_temp = evict_temp;
+  agent_state->flush_temp = flush_temp;
 
   // NOTE: we are using evict_effort as a proxy for *all* agent effort
   // (including flush).  This is probably fine (they should be
@@ -14177,8 +14538,7 @@ void PrimaryLogPG::scrub_snapshot_metadata(
 
       // A clone num_bytes will be added later when we have snapset
       if (!soid.is_snap()) {
-        stat.num_bytes += oi->has_extents() ?
-                          oi->extents.size() : oi->size;
+        stat.num_bytes += oi->size;
       }
       if (soid.nspace == cct->_conf->osd_hit_set_namespace)
 	stat.num_bytes_hit_set_archive += oi->size;
@@ -14274,7 +14634,7 @@ void PrimaryLogPG::scrub_snapshot_metadata(
 	bufferlist::iterator blp = bl.begin();
         try {
 	  snapset = SnapSet(); // Initialize optional<> before decoding into it
-	  ::decode(snapset.get(), blp);
+	  decode(snapset.get(), blp);
         } catch (buffer::error& e) {
 	  snapset = boost::none;
           osd->clog->error() << mode << " " << info.pgid << " " << soid
@@ -14530,7 +14890,7 @@ int PrimaryLogPG::rep_repair_primary_object(const hobject_t& soid, OpRequestRef 
 	    << soid << " error=" << r << dendl;
   } else try {
     bufferlist::iterator bliter = bv.begin();
-    ::decode(oi, bliter);
+    decode(oi, bliter);
     v = oi.version;
   } catch (...) {
     // Leave v as default constructed. This will fail when sent to older OSDs, but
